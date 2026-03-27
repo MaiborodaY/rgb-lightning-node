@@ -306,6 +306,7 @@ def main():
                 temporary_channel_id=None,
                 asset_id=asset_id,
                 asset_amount=OPEN_CHANNEL_ASSET_AMOUNT,
+                push_asset_amount=None,
             )
             open_resp = node_a.openchannel(open_req)
             print("openchannel temporary_channel_id:", open_resp.temporary_channel_id)

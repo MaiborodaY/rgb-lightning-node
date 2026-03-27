@@ -1,0 +1,12 @@
+pub(crate) mod helpers;
+
+mod close_coop_standard;
+mod close_coop_other_side;
+mod close_force_standard;
+mod close_coop_vanilla;
+mod multi_hop;
+mod openchannel_push_asset_amount;
+mod payment;
+mod restart;
+mod send_receive;
+mod vanilla_payment_on_rgb_channel;
