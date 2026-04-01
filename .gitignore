@@ -19,6 +19,8 @@
 # MacOS files
 .DS_Store
 *.swp
+**/__pycache__/
+*.pyc
 
 /bindings/uniffi-bindgen/target
 /target/uniffi

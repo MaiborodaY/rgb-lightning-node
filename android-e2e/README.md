@@ -22,10 +22,14 @@ Required environment:
 Start local regtest services:
 
 ```sh
+cd /path/to/rgb-lightning-node
 ./regtest.sh start
 ```
 
-Make sure an Android emulator is running and visible in `adb devices`.
+Make sure an Android emulator is already running and visible in `adb devices`.
+The runner does not start an emulator for you; it only checks that at least one
+Android device is in `device` state. Offline entries in `adb devices` do not
+block the run as long as there is at least one online device.
 
 The Android test connects to local regtest services through `10.0.2.2`:
 - bitcoind RPC: `10.0.2.2:18443`
@@ -40,6 +44,7 @@ Android artifact coverage remains a separate rollout step.
 Recommended entry point:
 
 ```sh
+cd /path/to/rgb-lightning-node
 ./scripts/android_uniffi_e2e.sh
 ```
 

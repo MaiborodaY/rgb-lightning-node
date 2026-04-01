@@ -1,5 +1,7 @@
+use electrum_client::ElectrumApi;
+use once_cell::sync::Lazy;
 pub(crate) use rgb_lightning_node::{
-    AssetBalanceInfo, AssetRecipients, AssignmentKind, ContractId, HtlcStatus, InvoiceStatus,
+    AssetBalanceInfo, AssetRecipients, AssignmentKind, Channel, ContractId, HtlcStatus, InvoiceStatus,
     LnInvoiceRequest, Payment, PaymentHash, RecipientId, RgbRecipient, SdkCloseChannelRequest,
     SdkCreateUtxosRequest, SdkInitRequest, SdkIssueAssetCfaRequest, SdkIssueAssetNiaRequest,
     SdkKeysendRequest, SdkNode, SdkOpenChannelRequest, SdkRefreshTransfersRequest,
@@ -8,7 +10,8 @@ pub(crate) use rgb_lightning_node::{
 };
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::RwLock;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -23,10 +26,14 @@ pub(crate) const OPEN_CHANNEL_CAPACITY_SAT: u64 = 100_000;
 pub(crate) const OPEN_CHANNEL_CONFIRM_BLOCKS: u32 = 6;
 pub(crate) const OPEN_CHANNEL_ASSET_AMOUNT: u64 = 600;
 pub(crate) const OPEN_CHANNEL_PUSH_MSAT: u64 = 3_500_000;
-pub(crate) const PAYMENT_MSAT: u64 = 3_000_000;
+pub(crate) const HTLC_MIN_MSAT: u64 = 3_000_000;
+pub(crate) const PAYMENT_MSAT: u64 = HTLC_MIN_MSAT;
 pub(crate) const CREATE_UTXOS_NUM: u8 = 10;
 pub(crate) const CREATE_UTXOS_FEE_RATE: u64 = 7;
 pub(crate) const PROXY_ENDPOINT_LOCAL: &str = "rpc://127.0.0.1:3000/json-rpc";
+const ELECTRUM_URL: &str = "127.0.0.1:50001";
+
+static MINER: Lazy<RwLock<Miner>> = Lazy::new(|| RwLock::new(Miner { no_mine_count: 0 }));
 
 fn repo_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -75,9 +82,134 @@ fn run_regtest(args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
+fn get_txout(txid: &str) -> String {
+    let output = Command::new("docker")
+        .args([
+            "compose",
+            "exec",
+            "-u",
+            "blits",
+            "bitcoind",
+            "bitcoin-cli",
+            "-regtest",
+            "-rpcwallet=miner",
+            "gettxout",
+            txid,
+            "0",
+        ])
+        .current_dir(repo_root())
+        .output()
+        .expect("failed to run gettxout");
+
+    assert!(
+        output.status.success(),
+        "`docker compose exec ... gettxout` failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
+
 pub(crate) fn mine(blocks: u32) {
-    let blocks = blocks.to_string();
-    run_regtest(&["mine", &blocks]);
+    mine_blocks(false, blocks);
+}
+
+fn mine_blocks(resume: bool, blocks: u32) {
+    let start = Instant::now();
+    if resume {
+        resume_mining();
+    }
+    let mut mined = false;
+    while !mined {
+        let miner = MINER.read().expect("MINER lock");
+        mined = miner.mine(blocks);
+        drop(miner);
+
+        if start.elapsed() > Duration::from_secs(120) {
+            resume_mining();
+        }
+        if !mined {
+            sleep(Duration::from_millis(500));
+        }
+    }
+    wait_electrs_sync();
+}
+
+fn stop_mining() {
+    MINER.write().expect("MINER lock").stop_mining();
+}
+
+fn resume_mining() {
+    MINER.write().expect("MINER lock").resume_mining();
+}
+
+fn get_block_count() -> u32 {
+    let output = Command::new("docker")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .arg("compose")
+        .args([
+            "exec",
+            "-T",
+            "-u",
+            "blits",
+            "bitcoind",
+            "bitcoin-cli",
+            "-regtest",
+        ])
+        .arg("getblockcount")
+        .current_dir(repo_root())
+        .output()
+        .expect("failed to call getblockcount");
+    assert!(output.status.success());
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<u32>()
+        .expect("could not parse blockcount")
+}
+
+fn wait_electrs_sync() {
+    let start = Instant::now();
+    let blockcount = get_block_count();
+    loop {
+        sleep(Duration::from_millis(100));
+        let electrum =
+            electrum_client::Client::new(ELECTRUM_URL).expect("cannot get electrum client");
+        if electrum.block_header(blockcount as usize).is_ok() {
+            return;
+        }
+        assert!(
+            start.elapsed() <= Duration::from_secs(10),
+            "electrs not syncing with bitcoind"
+        );
+    }
+}
+
+#[derive(Clone, Debug)]
+struct Miner {
+    no_mine_count: u32,
+}
+
+impl Miner {
+    fn mine(&self, blocks: u32) -> bool {
+        if self.no_mine_count > 0 {
+            return false;
+        }
+        let blocks = blocks.to_string();
+        run_regtest(&["mine", &blocks]);
+        true
+    }
+
+    fn stop_mining(&mut self) {
+        self.no_mine_count += 1;
+    }
+
+    fn resume_mining(&mut self) {
+        if self.no_mine_count > 0 {
+            self.no_mine_count -= 1;
+        }
+    }
 }
 
 pub(crate) fn sendtoaddress(address: &str, amount_btc: &str) {
@@ -221,6 +353,38 @@ pub(crate) fn wait_for_channel_funding_tx(
     }
 }
 
+pub(crate) fn wait_for_channel_open<F>(
+    node: &SdkNode,
+    matcher: F,
+    timeout: Duration,
+) -> lightning::ln::types::ChannelId
+where
+    F: Fn(&Channel) -> bool,
+{
+    let deadline = Instant::now() + timeout;
+    let channel_id = loop {
+        node.sync().expect("node sync while waiting for channel open");
+        let channels = node
+            .list_channels()
+            .expect("list_channels while waiting for channel open");
+
+        if let Some(channel) = channels.iter().find(|channel| matcher(channel) && !channel.ready) {
+            if let Some(txid) = &channel.funding_txid {
+                if !get_txout(&txid.to_string()).trim().is_empty() {
+                    mine(OPEN_CHANNEL_CONFIRM_BLOCKS);
+                    break channel.channel_id;
+                }
+            }
+        }
+
+        assert!(Instant::now() < deadline, "cannot find funding TX");
+        sleep(Duration::from_secs(1));
+    };
+
+    wait_for_channel_ready(node, channel_id, timeout);
+    channel_id
+}
+
 pub(crate) fn wait_for_usable_channel(
     node_a: &SdkNode,
     node_b: &SdkNode,
@@ -289,14 +453,10 @@ pub(crate) fn wait_for_usable_channels(
 ) {
     let deadline = Instant::now() + timeout;
     loop {
-        node.sync()
-            .expect("node sync while waiting for usable channels");
         let usable = node
-            .list_channels()
-            .expect("list_channels while waiting for usable channels")
-            .into_iter()
-            .filter(|channel| channel.ready && channel.is_usable)
-            .count();
+            .node_info()
+            .expect("node_info while waiting for usable channels")
+            .num_usable_channels as usize;
         if usable == expected_num_usable_channels {
             return;
         }
@@ -580,6 +740,7 @@ pub(crate) fn close_channel_with_force(
     peer_pubkey: bitcoin::secp256k1::PublicKey,
     force: bool,
 ) {
+    stop_mining();
     node.closechannel(SdkCloseChannelRequest {
         channel_id,
         peer_pubkey,
@@ -593,7 +754,7 @@ pub(crate) fn close_channel_with_force(
             .list_channels()
             .expect("list_channels while waiting for close");
         if !channels.iter().any(|channel| channel.channel_id == channel_id) {
-            mine(if force { 144 } else { 6 });
+            mine_blocks(true, if force { 144 } else { 6 });
             return;
         }
         assert!(Instant::now() < deadline, "channel did not close in time");

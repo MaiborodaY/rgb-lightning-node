@@ -9,4 +9,5 @@ mod openchannel_push_asset_amount;
 mod payment;
 mod restart;
 mod send_receive;
+mod swap_roundtrip_buy;
 mod vanilla_payment_on_rgb_channel;

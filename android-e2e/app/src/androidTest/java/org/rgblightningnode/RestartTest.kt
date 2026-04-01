@@ -13,6 +13,7 @@ import org.utexo.rgblightningnode.AssignmentKind
 import org.utexo.rgblightningnode.ContractId
 import org.utexo.rgblightningnode.HtlcStatus
 import org.utexo.rgblightningnode.LnInvoiceRequest
+import org.utexo.rgblightningnode.Payment
 import org.utexo.rgblightningnode.PaymentHash
 import org.utexo.rgblightningnode.RgbRecipient
 import org.utexo.rgblightningnode.RlnException
@@ -20,11 +21,11 @@ import org.utexo.rgblightningnode.SdkCloseChannelRequest
 import org.utexo.rgblightningnode.SdkCreateUtxosRequest
 import org.utexo.rgblightningnode.SdkInitRequest
 import org.utexo.rgblightningnode.SdkIssueAssetNiaRequest
-import org.utexo.rgblightningnode.SdkKeysendRequest
 import org.utexo.rgblightningnode.SdkNode
 import org.utexo.rgblightningnode.SdkOpenChannelRequest
 import org.utexo.rgblightningnode.SdkRefreshTransfersRequest
 import org.utexo.rgblightningnode.SdkRgbInvoiceRequest
+import org.utexo.rgblightningnode.SdkSendPaymentRequest
 import org.utexo.rgblightningnode.SdkUnlockRequest
 import org.utexo.rgblightningnode.SendRgbRequest
 import java.io.File
@@ -33,7 +34,7 @@ import java.net.URL
 import java.util.Base64
 
 @RunWith(AndroidJUnit4::class)
-class MultiOpenCloseTest {
+class RestartTest {
 
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
     private val storageBase = context.filesDir.absolutePath
@@ -44,12 +45,12 @@ class MultiOpenCloseTest {
     private val bitcoindPass = "password"
     private val proxyEndpoint = "rpc://10.0.2.2:3000/json-rpc"
 
-    private val nodeADaemonPort: UShort = 3811u
-    private val nodeBDaemonPort: UShort = 3812u
-    private val nodeCDaemonPort: UShort = 3813u
-    private val nodeAPeerPort: UShort = 13211u
-    private val nodeBPeerPort: UShort = 13212u
-    private val nodeCPeerPort: UShort = 13213u
+    private val nodeADaemonPort: UShort = 3911u
+    private val nodeBDaemonPort: UShort = 3912u
+    private val nodeCDaemonPort: UShort = 3913u
+    private val nodeAPeerPort: UShort = 13311u
+    private val nodeBPeerPort: UShort = 13312u
+    private val nodeCPeerPort: UShort = 13313u
 
     private val openChannelCapacitySat: ULong = 100_000u
     private val openChannelConfirmBlocks = 6
@@ -227,7 +228,36 @@ class MultiOpenCloseTest {
         error("channel not usable after ${timeoutSec}s")
     }
 
-    private fun waitForPaymentStatus(node: SdkNode, paymentHash: PaymentHash, timeoutSec: Long) {
+    private fun waitForChannelReady(node: SdkNode, channelId: String, timeoutSec: Long) {
+        val deadline = System.currentTimeMillis() + timeoutSec * 1_000L
+        while (System.currentTimeMillis() < deadline) {
+            node.sync()
+            val channel = node.listChannels().firstOrNull { it.channelId == channelId }
+            if (channel != null && channel.ready) {
+                log("channel is ready")
+                return
+            }
+            Thread.sleep(1_000L)
+        }
+        error("cannot find re-established channel: channelId=$channelId")
+    }
+
+    private fun waitForUsableChannels(node: SdkNode, expectedCount: Int, timeoutSec: Long) {
+        val deadline = System.currentTimeMillis() + timeoutSec * 1_000L
+        var lastCount = 0
+        while (System.currentTimeMillis() < deadline) {
+            node.sync()
+            val usable = node.listChannels().count { it.isUsable }
+            lastCount = usable
+            if (usable == expectedCount) {
+                return
+            }
+            Thread.sleep(1_000L)
+        }
+        error("usable channel count did not become expected=$expectedCount actual=$lastCount")
+    }
+
+    private fun waitForPaymentStatus(node: SdkNode, paymentHash: PaymentHash, timeoutSec: Long): Payment {
         val deadline = System.currentTimeMillis() + timeoutSec * 1_000L
         var last = "not found"
         while (System.currentTimeMillis() < deadline) {
@@ -235,7 +265,7 @@ class MultiOpenCloseTest {
                 val payment = node.getPayment(paymentHash)
                 last = payment.status.name
                 if (payment.status == HtlcStatus.SUCCEEDED) {
-                    return
+                    return payment
                 }
             } catch (_: RlnException.NotFound) {
                 last = "not found"
@@ -245,27 +275,19 @@ class MultiOpenCloseTest {
         error("payment did not succeed after ${timeoutSec}s, last=$last")
     }
 
-    private fun keysend(
-        sender: SdkNode,
-        destPubkey: String,
-        amtMsat: ULong?,
-        assetId: ContractId?,
-        assetAmount: ULong?,
-    ): PaymentHash {
-        val response = sender.keysend(
-            SdkKeysendRequest(
-                destPubkey = destPubkey,
-                amtMsat = amtMsat ?: paymentMsat,
-                assetId = assetId,
-                assetAmount = assetAmount,
-            )
-        )
-        assertTrue(
-            "unexpected keysend status: ${response.status}",
-            response.status == HtlcStatus.PENDING || response.status == HtlcStatus.SUCCEEDED
-        )
-        waitForPaymentStatus(sender, response.paymentHash, 60L)
-        return response.paymentHash
+    private fun waitForSucceededPaymentInList(node: SdkNode, paymentHash: PaymentHash, timeoutSec: Long) {
+        val deadline = System.currentTimeMillis() + timeoutSec * 1_000L
+        var lastCount = 0
+        while (System.currentTimeMillis() < deadline) {
+            val payments = node.listPayments()
+            lastCount = payments.size
+            val payment = payments.firstOrNull { it.paymentHash == paymentHash }
+            if (payment != null && payment.status == HtlcStatus.SUCCEEDED) {
+                return
+            }
+            Thread.sleep(1_000L)
+        }
+        error("succeeded payment not found in listPayments: paymentHash=$paymentHash list_size=$lastCount")
     }
 
     private fun closeChannel(node: SdkNode, channelId: String, peerPubkey: String, force: Boolean = false) {
@@ -334,7 +356,7 @@ class MultiOpenCloseTest {
     }
 
     private fun log(msg: String) {
-        android.util.Log.i("MultiOpenCloseTest", msg)
+        android.util.Log.i("RestartTest", msg)
     }
 
     private fun safeShutdown(node: SdkNode?) {
@@ -344,52 +366,69 @@ class MultiOpenCloseTest {
         }
     }
 
+    private fun pauseAfterShutdown() {
+        Thread.sleep(2_000L)
+    }
+
     @Test
-    fun multiOpenClose() {
-        File("$storageBase/multi_open_close/node_a").deleteRecursively()
-        File("$storageBase/multi_open_close/node_b").deleteRecursively()
-        File("$storageBase/multi_open_close/node_c").deleteRecursively()
+    fun restart() {
+        File("$storageBase/restart/node_a").deleteRecursively()
+        File("$storageBase/restart/node_b").deleteRecursively()
+        File("$storageBase/restart/node_c").deleteRecursively()
 
-        val nodeA = makeNode("multi_open_close/node_a", nodeADaemonPort, nodeAPeerPort)
-        var nodeB: SdkNode? = null
-        var nodeC: SdkNode? = null
+        var nodeA: SdkNode? = makeNode("restart/node_a", nodeADaemonPort, nodeAPeerPort)
+        var nodeB: SdkNode? = makeNode("restart/node_b", nodeBDaemonPort, nodeBPeerPort)
+        var nodeC: SdkNode? = makeNode("restart/node_c", nodeCDaemonPort, nodeCPeerPort)
         var step = "start"
+
         try {
-            step = "initA"; initNode(nodeA, "nodeApass", "node A")
-            step = "unlockA"; unlockNode(nodeA, "nodeApass", "node A")
+            step = "initA"; initNode(requireNotNull(nodeA), "nodeApass", "node A")
+            step = "initB"; initNode(requireNotNull(nodeB), "nodeBpass", "node B")
+            step = "initC"; initNode(requireNotNull(nodeC), "nodeCpass", "node C")
+            step = "unlockA"; unlockNode(requireNotNull(nodeA), "nodeApass", "node A")
+            step = "unlockB"; unlockNode(requireNotNull(nodeB), "nodeBpass", "node B")
+            step = "unlockC"; unlockNode(requireNotNull(nodeC), "nodeCpass", "node C")
 
-            step = "makeB"; nodeB = makeNode("multi_open_close/node_b", nodeBDaemonPort, nodeBPeerPort)
-            step = "initB"; initNode(nodeB, "nodeBpass", "node B")
-            step = "unlockB"; unlockNode(nodeB, "nodeBpass", "node B")
+            step = "restartAll1"
+            safeShutdown(nodeA); safeShutdown(nodeB); safeShutdown(nodeC)
+            pauseAfterShutdown()
+            nodeA = makeNode("restart/node_a", nodeADaemonPort, nodeAPeerPort)
+            nodeB = makeNode("restart/node_b", nodeBDaemonPort, nodeBPeerPort)
+            nodeC = makeNode("restart/node_c", nodeCDaemonPort, nodeCPeerPort)
+            unlockNode(requireNotNull(nodeA), "nodeApass", "node A")
+            unlockNode(requireNotNull(nodeB), "nodeBpass", "node B")
+            unlockNode(requireNotNull(nodeC), "nodeCpass", "node C")
 
-            step = "makeC"; nodeC = makeNode("multi_open_close/node_c", nodeCDaemonPort, nodeCPeerPort)
-            step = "initC"; initNode(nodeC, "nodeCpass", "node C")
-            step = "unlockC"; unlockNode(nodeC, "nodeCpass", "node C")
-
-            val nodeBReady = requireNotNull(nodeB)
-            val nodeCReady = requireNotNull(nodeC)
-
-            step = "fundA"; fundAndCreateUtxos(nodeA, "node A")
-            step = "fundB"; fundAndCreateUtxos(nodeBReady, "node B")
-            step = "fundC"; fundAndCreateUtxos(nodeCReady, "node C")
+            step = "fundA"; fundAndCreateUtxos(requireNotNull(nodeA), "node A")
+            step = "fundB"; fundAndCreateUtxos(requireNotNull(nodeB), "node B")
+            step = "fundC"; fundAndCreateUtxos(requireNotNull(nodeC), "node C")
 
             step = "issueNia"
-            val assetId = issueAssetNia(nodeA, "node A")
-            mine(1)
-            nodeA.sync()
+            val assetId = issueAssetNia(requireNotNull(nodeA), "node A")
+            assertEquals(1000uL, assetBalanceSpendable(requireNotNull(nodeA), assetId))
+
+            step = "restart12_1"
+            safeShutdown(nodeA); safeShutdown(nodeB); safeShutdown(nodeC)
+            pauseAfterShutdown()
+            nodeA = makeNode("restart/node_a", nodeADaemonPort, nodeAPeerPort)
+            nodeB = makeNode("restart/node_b", nodeBDaemonPort, nodeBPeerPort)
+            nodeC = null
+            unlockNode(requireNotNull(nodeA), "nodeApass", "node A")
+            unlockNode(requireNotNull(nodeB), "nodeBpass", "node B")
+            assertEquals(1000uL, assetBalanceSpendable(requireNotNull(nodeA), assetId))
 
             step = "nodeInfo"
-            val nodeBPubkey = nodeBReady.nodeInfo().pubkey
+            val nodeBPubkey = requireNotNull(nodeB).nodeInfo().pubkey
             val peerUri = "$nodeBPubkey@127.0.0.1:${nodeBPeerPort.toInt()}"
             try {
-                nodeA.connectpeer(peerUri)
+                requireNotNull(nodeA).connectpeer(peerUri)
                 log("connectpeer: ok")
             } catch (_: RlnException.Conflict) {
                 log("connectpeer: already connected")
             }
 
-            step = "openPartial1"
-            val firstOpen = nodeA.openchannel(
+            step = "openchannel"
+            val openResponse = requireNotNull(nodeA).openchannel(
                 SdkOpenChannelRequest(
                     peerPubkeyAndOptAddr = peerUri,
                     capacitySat = openChannelCapacitySat,
@@ -404,76 +443,123 @@ class MultiOpenCloseTest {
                     pushAssetAmount = null,
                 )
             )
-            waitForChannelFundingTx(nodeA, nodeBReady, assetId, 120L)
+            waitForChannelFundingTx(requireNotNull(nodeA), requireNotNull(nodeB), assetId, 120L)
             mine(openChannelConfirmBlocks)
-            waitForUsableChannel(nodeA, nodeBReady, assetId, channelReadyTimeoutSec)
+            waitForUsableChannel(requireNotNull(nodeA), requireNotNull(nodeB), assetId, channelReadyTimeoutSec)
+            assertEquals(400uL, assetBalanceSpendable(requireNotNull(nodeA), assetId))
+            val channelId = requireNotNull(nodeA).getChannelId(openResponse.temporaryChannelId)
 
-            step = "checkBalanceAfterOpen1"
-            assertEquals(400uL, assetBalanceSpendable(nodeA, assetId))
+            step = "restart1"
+            safeShutdown(nodeA); safeShutdown(nodeB)
+            pauseAfterShutdown()
+            nodeA = makeNode("restart/node_a", nodeADaemonPort, nodeAPeerPort)
+            nodeB = null
+            unlockNode(requireNotNull(nodeA), "nodeApass", "node A")
+            waitForChannelReady(requireNotNull(nodeA), channelId, 10L)
 
-            step = "keysend1"
-            keysend(nodeA, nodeBPubkey, null, assetId, 100u)
+            step = "restart12_2"
+            safeShutdown(nodeA)
+            pauseAfterShutdown()
+            nodeA = makeNode("restart/node_a", nodeADaemonPort, nodeAPeerPort)
+            nodeB = makeNode("restart/node_b", nodeBDaemonPort, nodeBPeerPort)
+            unlockNode(requireNotNull(nodeA), "nodeApass", "node A")
+            unlockNode(requireNotNull(nodeB), "nodeBpass", "node B")
+            waitForChannelReady(requireNotNull(nodeA), channelId, 10L)
+            waitForUsableChannels(requireNotNull(nodeA), 1, 60L)
+            waitForUsableChannels(requireNotNull(nodeB), 1, 60L)
+            assertEquals(400uL, assetBalanceSpendable(requireNotNull(nodeA), assetId))
 
-            step = "close1"
-            val firstChannelId = nodeA.getChannelId(firstOpen.temporaryChannelId)
-            closeChannel(nodeA, firstChannelId, nodeBPubkey)
-            waitForBalance(nodeA, assetId, 900uL, 70L)
-            waitForBalance(nodeBReady, assetId, 100uL, 70L)
-
-            step = "openPartial2"
-            val secondOpen = nodeA.openchannel(
-                SdkOpenChannelRequest(
-                    peerPubkeyAndOptAddr = peerUri,
-                    capacitySat = openChannelCapacitySat,
-                    pushMsat = 0u,
-                    `public` = true,
-                    withAnchors = true,
-                    feeBaseMsat = null,
-                    feeProportionalMillionths = null,
-                    temporaryChannelId = null,
+            step = "lnInvoice"
+            val invoice = requireNotNull(nodeB).lnInvoice(
+                LnInvoiceRequest(
+                    amtMsat = paymentMsat,
+                    expirySec = 900u,
                     assetId = assetId,
-                    assetAmount = 500u,
-                    pushAssetAmount = null,
+                    assetAmount = 100u,
+                )
+            ).invoice
+            step = "sendPayment"
+            val sendPayment = requireNotNull(nodeA).sendpayment(
+                SdkSendPaymentRequest(
+                    invoice = invoice,
+                    amtMsat = null,
+                    assetId = null,
+                    assetAmount = null,
                 )
             )
-            waitForChannelFundingTx(nodeA, nodeBReady, assetId, 120L)
-            mine(openChannelConfirmBlocks)
-            waitForUsableChannel(nodeA, nodeBReady, assetId, channelReadyTimeoutSec)
+            val paymentHash = requireNotNull(sendPayment.paymentHash)
+            waitForPaymentStatus(requireNotNull(nodeA), paymentHash, 60L)
 
-            step = "checkBalanceAfterOpen2"
-            assertEquals(400uL, assetBalanceSpendable(nodeA, assetId))
+            step = "restart12_3"
+            safeShutdown(nodeA); safeShutdown(nodeB)
+            pauseAfterShutdown()
+            nodeA = makeNode("restart/node_a", nodeADaemonPort, nodeAPeerPort)
+            nodeB = makeNode("restart/node_b", nodeBDaemonPort, nodeBPeerPort)
+            log("restart12_3: recreated node A and node B")
+            step = "restart12_3_unlockA"
+            unlockNode(requireNotNull(nodeA), "nodeApass", "node A")
+            log("restart12_3: node A unlocked")
+            step = "restart12_3_unlockB"
+            unlockNode(requireNotNull(nodeB), "nodeBpass", "node B")
+            log("restart12_3: node B unlocked")
+            step = "restart12_3_waitReady"
+            waitForChannelReady(requireNotNull(nodeA), channelId, 10L)
+            step = "restart12_3_waitUsableA"
+            waitForUsableChannels(requireNotNull(nodeA), 1, 60L)
+            step = "restart12_3_waitUsableB"
+            waitForUsableChannels(requireNotNull(nodeB), 1, 60L)
+            step = "restart12_3_paymentListA"
+            waitForSucceededPaymentInList(requireNotNull(nodeA), paymentHash, 30L)
+            step = "restart12_3_paymentListB"
+            waitForSucceededPaymentInList(requireNotNull(nodeB), paymentHash, 30L)
 
-            step = "keysend2"
-            keysend(nodeA, nodeBPubkey, null, assetId, 100u)
+            step = "closeChannel"
+            closeChannel(requireNotNull(nodeA), channelId, nodeBPubkey)
+            waitForBalance(requireNotNull(nodeA), assetId, 900uL, 70L)
+            waitForBalance(requireNotNull(nodeB), assetId, 100uL, 70L)
 
-            step = "close2"
-            val secondChannelId = nodeA.getChannelId(secondOpen.temporaryChannelId)
-            closeChannel(nodeA, secondChannelId, nodeBPubkey)
-            waitForBalance(nodeA, assetId, 800uL, 70L)
-            waitForBalance(nodeBReady, assetId, 200uL, 70L)
+            step = "restartAll2"
+            safeShutdown(nodeA); safeShutdown(nodeB)
+            pauseAfterShutdown()
+            nodeA = makeNode("restart/node_a", nodeADaemonPort, nodeAPeerPort)
+            nodeB = makeNode("restart/node_b", nodeBDaemonPort, nodeBPeerPort)
+            nodeC = makeNode("restart/node_c", nodeCDaemonPort, nodeCPeerPort)
+            unlockNode(requireNotNull(nodeA), "nodeApass", "node A")
+            unlockNode(requireNotNull(nodeB), "nodeBpass", "node B")
+            unlockNode(requireNotNull(nodeC), "nodeCpass", "node C")
+            assertEquals(900uL, assetBalanceSpendable(requireNotNull(nodeA), assetId))
+            assertEquals(100uL, assetBalanceSpendable(requireNotNull(nodeB), assetId))
 
             step = "sendRgbAtoC"
-            val recipientIdA = rgbInvoice(nodeCReady)
-            sendRgb(nodeA, assetId, recipientIdA, 700u)
+            val recipientIdA = rgbInvoice(requireNotNull(nodeC))
+            sendRgb(requireNotNull(nodeA), assetId, recipientIdA, 700u)
             mine(1)
-            refreshTransfers(nodeCReady)
-            refreshTransfers(nodeCReady)
-            refreshTransfers(nodeA)
+            refreshTransfers(requireNotNull(nodeC))
+            refreshTransfers(requireNotNull(nodeC))
+            refreshTransfers(requireNotNull(nodeA))
 
             step = "sendRgbBtoC"
-            val recipientIdB = rgbInvoice(nodeCReady)
-            sendRgb(nodeBReady, assetId, recipientIdB, 150u)
+            val recipientIdB = rgbInvoice(requireNotNull(nodeC))
+            sendRgb(requireNotNull(nodeB), assetId, recipientIdB, 50u)
             mine(1)
-            refreshTransfers(nodeCReady)
-            refreshTransfers(nodeCReady)
-            refreshTransfers(nodeBReady)
+            refreshTransfers(requireNotNull(nodeC))
+            refreshTransfers(requireNotNull(nodeC))
+            refreshTransfers(requireNotNull(nodeB))
 
-            step = "finalBalances"
-            assertEquals(100uL, assetBalanceSpendable(nodeA, assetId))
-            assertEquals(50uL, assetBalanceSpendable(nodeBReady, assetId))
-            assertEquals(850uL, assetBalanceSpendable(nodeCReady, assetId))
+            step = "restartAll3"
+            safeShutdown(nodeA); safeShutdown(nodeB); safeShutdown(nodeC)
+            pauseAfterShutdown()
+            nodeA = makeNode("restart/node_a", nodeADaemonPort, nodeAPeerPort)
+            nodeB = makeNode("restart/node_b", nodeBDaemonPort, nodeBPeerPort)
+            nodeC = makeNode("restart/node_c", nodeCDaemonPort, nodeCPeerPort)
+            unlockNode(requireNotNull(nodeA), "nodeApass", "node A")
+            unlockNode(requireNotNull(nodeB), "nodeBpass", "node B")
+            unlockNode(requireNotNull(nodeC), "nodeCpass", "node C")
+            assertEquals(200uL, assetBalanceSpendable(requireNotNull(nodeA), assetId))
+            assertEquals(50uL, assetBalanceSpendable(requireNotNull(nodeB), assetId))
+            assertEquals(750uL, assetBalanceSpendable(requireNotNull(nodeC), assetId))
 
-            log("SUCCESS: Android multi_open_close completed")
+            log("SUCCESS: Android restart completed")
         } catch (e: Exception) {
             throw RuntimeException("FAILED at step=$step: ${e.message}", e)
         } finally {

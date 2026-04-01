@@ -265,6 +265,30 @@ def wait_for_usable_channel(
     )
 
 
+def wait_for_channel_ready(
+    node: rln.SdkNode,
+    channel_id,
+    timeout_sec: int = 10,
+):
+    deadline = time.time() + timeout_sec
+    last = "channel not found"
+    while time.time() < deadline:
+        node.sync()
+        channel = next((c for c in node.list_channels() if c.channel_id == channel_id), None)
+        if channel is not None:
+            last = (
+                f"id={channel.channel_id},status={channel.status},ready={channel.ready},"
+                f"usable={channel.is_usable},funding={channel.funding_txid},"
+                f"short_channel_id={channel.short_channel_id}"
+            )
+            if channel.ready:
+                return
+        time.sleep(1)
+    raise RuntimeError(
+        f"channel did not become ready after {timeout_sec}s: channel_id={channel_id} last={last}"
+    )
+
+
 def wait_payment_final(node: rln.SdkNode, invoice: str, timeout_sec: int = 60):
     deadline = time.time() + timeout_sec
     last = None
@@ -682,6 +706,8 @@ def payment_scenario():
         wait_for_channel_funding_tx(node_a, node_b, asset_id, 120)
         print(f"Mining {OPEN_CHANNEL_CONFIRM_BLOCKS} blocks for channel confirmations...")
         run_regtest("mine", str(OPEN_CHANNEL_CONFIRM_BLOCKS))
+        channel_id = node_a.get_channel_id(open_response.temporary_channel_id)
+        wait_for_channel_ready(node_a, channel_id, 10)
         wait_for_usable_channel(node_a, node_b, asset_id, CHANNEL_READY_TIMEOUT_SEC, 5)
         print("Channel is usable")
 
