@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import hashlib
 import os
 import shutil
 import subprocess
@@ -331,6 +332,31 @@ def wait_for_payment_status(
     raise RuntimeError(
         f"timeout waiting for payment success: payment_hash={payment_hash} last_status={last_status} after {timeout_sec}s"
     )
+
+
+def wait_for_payment_present_in_list(node: rln.SdkNode, payment_hash, timeout_sec: int):
+    deadline = time.time() + timeout_sec
+    last_count = 0
+    while time.time() < deadline:
+        payments = node.list_payments()
+        last_count = len(payments)
+        payment = next((p for p in payments if p.payment_hash == payment_hash), None)
+        if payment is not None:
+            return payment
+        time.sleep(1)
+    raise RuntimeError(
+        f"payment not found in list_payments: payment_hash={payment_hash} list_size={last_count} after {timeout_sec}s"
+    )
+
+
+def check_preimage_matches_hash(payment: rln.Payment, expected_payment_hash):
+    if payment.preimage is None:
+        raise RuntimeError("payment preimage is null")
+    payment_preimage_hash = hashlib.sha256(bytes.fromhex(payment.preimage)).hexdigest()
+    if payment_preimage_hash != expected_payment_hash:
+        raise RuntimeError(
+            f"payment preimage hash mismatch: expected={expected_payment_hash} actual={payment_preimage_hash}"
+        )
 
 
 def wait_for_usable_channels(node: rln.SdkNode, expected_count: int, timeout_sec: int):
@@ -692,6 +718,26 @@ def payment_scenario():
         print(f"invoice final status on node B: {final_status.name}")
         if final_status != rln.InvoiceStatus.SUCCEEDED:
             raise RuntimeError(f"Payment did not succeed (status={final_status})")
+
+        decoded = node_a.decode_ln_invoice(invoice)
+        sender_payment = wait_for_payment_status(node_a, decoded.payment_hash, 60)
+        receiver_payment = wait_for_payment_status(node_b, decoded.payment_hash, 60)
+        check_preimage_matches_hash(sender_payment, decoded.payment_hash)
+        check_preimage_matches_hash(receiver_payment, decoded.payment_hash)
+
+        listed_sender_payment = wait_for_payment_present_in_list(
+            node_a, decoded.payment_hash, 60
+        )
+        if listed_sender_payment.payment_hash != decoded.payment_hash:
+            raise RuntimeError("sender payment hash mismatch in list_payments")
+        check_preimage_matches_hash(listed_sender_payment, decoded.payment_hash)
+
+        listed_receiver_payment = wait_for_payment_present_in_list(
+            node_b, decoded.payment_hash, 60
+        )
+        if listed_receiver_payment.payment_hash != decoded.payment_hash:
+            raise RuntimeError("receiver payment hash mismatch in list_payments")
+        check_preimage_matches_hash(listed_receiver_payment, decoded.payment_hash)
 
         print("SUCCESS: Python SDK-only node-to-node payment completed")
     finally:

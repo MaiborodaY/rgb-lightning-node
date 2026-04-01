@@ -1,6 +1,19 @@
 use crate::helpers::*;
+use bitcoin::hex::{DisplayHex, FromHex};
+use bitcoin::hashes::sha256::Hash as Sha256;
+use bitcoin::hashes::Hash;
 use serial_test::serial;
 use std::{fs, time::Duration};
+
+fn check_preimage_matches_hash(payment: &Payment, expected_payment_hash: &PaymentHash) {
+    let payment_preimage = payment.preimage.as_ref().expect("payment preimage");
+    let payment_preimage_hash = Sha256::hash(
+        &Vec::from_hex(payment_preimage).expect("preimage hex"),
+    )
+    .to_byte_array()
+    .to_lower_hex_string();
+    assert_eq!(payment_preimage_hash, expected_payment_hash.0.to_lower_hex_string());
+}
 
 #[test]
 #[serial]
@@ -146,19 +159,23 @@ fn success() {
         assert!(matches!(sender_payment.status, HtlcStatus::Succeeded));
         assert_eq!(sender_payment.asset_id, Some(asset_id.clone()));
         assert_eq!(sender_payment.asset_amount, Some(asset_amount));
+        check_preimage_matches_hash(&sender_payment, &decoded.payment_hash);
 
         let receiver_payment =
             wait_for_payment_status(&node_b, &decoded.payment_hash, Duration::from_secs(60));
         assert!(matches!(receiver_payment.status, HtlcStatus::Succeeded));
         assert_eq!(receiver_payment.asset_id, Some(asset_id.clone()));
         assert_eq!(receiver_payment.asset_amount, Some(asset_amount));
+        check_preimage_matches_hash(&receiver_payment, &decoded.payment_hash);
 
         let payment =
             wait_for_payment_present_in_list(&node_a, &decoded.payment_hash, Duration::from_secs(60));
         assert_eq!(payment.payment_hash, decoded.payment_hash);
+        check_preimage_matches_hash(&payment, &decoded.payment_hash);
         let payment =
             wait_for_payment_present_in_list(&node_b, &decoded.payment_hash, Duration::from_secs(60));
         assert_eq!(payment.payment_hash, decoded.payment_hash);
+        check_preimage_matches_hash(&payment, &decoded.payment_hash);
 
         let asset_amount = 50;
         let invoice = node_a
@@ -187,10 +204,12 @@ fn success() {
             wait_for_payment_status(&node_a, &decoded.payment_hash, Duration::from_secs(60));
         assert_eq!(payment.asset_id, Some(asset_id.clone()));
         assert_eq!(payment.asset_amount, Some(asset_amount));
+        check_preimage_matches_hash(&payment, &decoded.payment_hash);
         let payment =
             wait_for_payment_status(&node_b, &decoded.payment_hash, Duration::from_secs(60));
         assert_eq!(payment.asset_id, Some(asset_id.clone()));
         assert_eq!(payment.asset_amount, Some(asset_amount));
+        check_preimage_matches_hash(&payment, &decoded.payment_hash);
 
         let invoice = node_b
             .ln_invoice(LnInvoiceRequest {
@@ -216,10 +235,12 @@ fn success() {
             wait_for_payment_status(&node_a, &decoded.payment_hash, Duration::from_secs(60));
         assert_eq!(payment.asset_id, Some(asset_id.clone()));
         assert_eq!(payment.asset_amount, Some(asset_amount));
+        check_preimage_matches_hash(&payment, &decoded.payment_hash);
         let payment =
             wait_for_payment_status(&node_b, &decoded.payment_hash, Duration::from_secs(60));
         assert_eq!(payment.asset_id, Some(asset_id.clone()));
         assert_eq!(payment.asset_amount, Some(asset_amount));
+        check_preimage_matches_hash(&payment, &decoded.payment_hash);
 
         let invoice = node_a
             .ln_invoice(LnInvoiceRequest {
@@ -245,10 +266,12 @@ fn success() {
             wait_for_payment_status(&node_a, &decoded.payment_hash, Duration::from_secs(60));
         assert_eq!(payment.asset_id, Some(asset_id.clone()));
         assert_eq!(payment.asset_amount, Some(asset_amount));
+        check_preimage_matches_hash(&payment, &decoded.payment_hash);
         let payment =
             wait_for_payment_status(&node_b, &decoded.payment_hash, Duration::from_secs(60));
         assert_eq!(payment.asset_id, Some(asset_id.clone()));
         assert_eq!(payment.asset_amount, Some(asset_amount));
+        check_preimage_matches_hash(&payment, &decoded.payment_hash);
 
         let channels_1 = node_a
             .list_channels()

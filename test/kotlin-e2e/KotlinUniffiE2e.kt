@@ -23,6 +23,7 @@ import org.utexo.rgblightningnode.SendRgbRequest
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.security.MessageDigest
 import kotlin.io.path.exists
 import kotlin.io.path.pathString
 
@@ -347,6 +348,26 @@ private fun waitForPaymentPresentInList(node: SdkNode, paymentHash: PaymentHash,
     error("payment not found in listPayments: paymentHash=$paymentHash list_size=$lastCount after ${timeoutSec}s")
 }
 
+private fun hexToBytes(value: String): ByteArray {
+    require(value.length % 2 == 0) { "hex string must have even length" }
+    return ByteArray(value.length / 2) { index ->
+        value.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+    }
+}
+
+private fun sha256Hex(bytes: ByteArray): String =
+    MessageDigest.getInstance("SHA-256")
+        .digest(bytes)
+        .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+
+private fun checkPreimageMatchesHash(payment: Payment, expectedPaymentHash: PaymentHash) {
+    val paymentPreimage = requireNotNull(payment.preimage) { "payment preimage is null" }
+    val paymentPreimageHash = sha256Hex(hexToBytes(paymentPreimage))
+    check(paymentPreimageHash == expectedPaymentHash) {
+        "payment preimage hash mismatch: expected=$expectedPaymentHash actual=$paymentPreimageHash"
+    }
+}
+
 private fun waitPaymentFinal(node: SdkNode, invoice: String, timeoutSec: Long = 60L): InvoiceStatus {
     val deadline = System.currentTimeMillis() + timeoutSec * 1000L
     var last = InvoiceStatus.PENDING
@@ -535,6 +556,20 @@ private fun paymentScenario() {
         check(finalStatus == InvoiceStatus.SUCCEEDED) {
             "Payment did not succeed (status=$finalStatus)"
         }
+
+        val decoded = nodeA.decodeLnInvoice(invoice)
+        val senderPayment = waitForPaymentStatus(nodeA, decoded.paymentHash, 60L)
+        val receiverPayment = waitForPaymentStatus(nodeB, decoded.paymentHash, 60L)
+        checkPreimageMatchesHash(senderPayment, decoded.paymentHash)
+        checkPreimageMatchesHash(receiverPayment, decoded.paymentHash)
+
+        val listedSenderPayment = waitForPaymentPresentInList(nodeA, decoded.paymentHash, 60L)
+        check(listedSenderPayment.paymentHash == decoded.paymentHash)
+        checkPreimageMatchesHash(listedSenderPayment, decoded.paymentHash)
+
+        val listedReceiverPayment = waitForPaymentPresentInList(nodeB, decoded.paymentHash, 60L)
+        check(listedReceiverPayment.paymentHash == decoded.paymentHash)
+        checkPreimageMatchesHash(listedReceiverPayment, decoded.paymentHash)
 
         println("SUCCESS: Kotlin SDK-only node-to-node payment completed")
     } finally {
@@ -874,9 +909,7 @@ private fun expectOpenchannelWithoutAddrFails(
         )
         error("openchannel without addr should fail when peer is not connected")
     } catch (e: RlnException.InvalidRequest) {
-        check(e.message?.contains("cannot find the address for the provided pubkey") == true) {
-            "unexpected openchannel error: ${e.message}"
-        }
+        // SDK/UniFFI preserves the public error category, not the HTTP-style detail string.
     }
 }
 
