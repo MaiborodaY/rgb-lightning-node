@@ -3,10 +3,13 @@
 This project runs Android instrumented end-to-end tests against the public
 `SdkNode` / UniFFI path.
 
-Current scenario:
+Current scenarios:
 
 1. `payment`
 2. `multi_open_close`
+3. `restart`
+4. `concurrent_btc_payments`
+5. `swap_roundtrip_buy`
 
 ## Prerequisites
 

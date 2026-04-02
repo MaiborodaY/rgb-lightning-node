@@ -1,0 +1,96 @@
+name: SDK E2E
+
+on:
+  push:
+    branches: ["main", "dev", "stage"]
+  pull_request:
+    branches: ["main", "dev", "stage"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  python-build:
+    name: Python E2E Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.85.1
+          rustflags: ""
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build Python UniFFI library
+        run: cargo build --release --features uniffi --lib
+
+      - name: Generate Python bindings
+        run: ./scripts/ci/uniffi_generate_python.sh
+
+      - name: Upload Python UniFFI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-uniffi-linux
+          if-no-files-found: error
+          path: |
+            target/release/librgb_lightning_node.so
+            target/uniffi/python/**
+
+  python-e2e:
+    name: Python E2E (${{ matrix.scenario }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: python-build
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - payment
+          - openchannel_push_asset_amount
+          - getchannelid_fail
+          - openchannel_fail_no_utxos
+          - openchannel_fail_unknown_asset
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download Python UniFFI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: python-uniffi-linux
+          path: python-artifacts
+
+      - name: Start regtest services
+        run: ./regtest.sh start
+
+      - name: Run Python UniFFI scenario
+        env:
+          PYTHONPATH: ${{ github.workspace }}/python-artifacts/target/uniffi/python
+          LD_LIBRARY_PATH: ${{ github.workspace }}/python-artifacts/target/release
+          PYTHON_E2E_SCENARIO: ${{ matrix.scenario }}
+        run: python3 test/python-e2e/PythonUniffiE2e.py
+
+      - name: Stop regtest services
+        if: always()
+        run: ./regtest.sh stop

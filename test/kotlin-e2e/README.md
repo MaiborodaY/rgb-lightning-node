@@ -15,9 +15,11 @@ Current scenarios:
 ## Prerequisites
 
 Required tools:
+- `cargo`
 - `java`
 - `kotlinc`
 - `libjna-java`
+- `docker`
 
 Start local regtest services:
 

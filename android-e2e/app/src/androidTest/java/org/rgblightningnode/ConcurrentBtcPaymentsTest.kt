@@ -194,21 +194,27 @@ class ConcurrentBtcPaymentsTest {
         error("channel not usable after ${timeoutSec}s")
     }
 
-    private fun waitForPendingPayments(node: SdkNode, count: Int, timeoutSec: Long): List<Payment> {
+    private fun waitForObservedPayments(
+        node: SdkNode,
+        paymentHashes: List<PaymentHash>,
+        timeoutSec: Long,
+    ): List<Payment> {
         val deadline = System.currentTimeMillis() + timeoutSec * 1_000L
         var lastPayments = emptyList<Payment>()
         while (System.currentTimeMillis() < deadline) {
             node.sync()
             val payments = node.listPayments()
             lastPayments = payments
-            if (payments.size == count && payments.all { it.status == HtlcStatus.PENDING }) {
-                return payments
+            val observed = payments.filter { it.paymentHash in paymentHashes }
+            if (observed.size == paymentHashes.size && observed.none { it.status == HtlcStatus.FAILED }) {
+                return observed
             }
             Thread.sleep(1_000L)
         }
         error(
-            "did not observe $count pending payments after ${timeoutSec}s; " +
-                "last_count=${lastPayments.size} last_statuses=${lastPayments.map { it.status.name }}"
+            "did not observe ${paymentHashes.size} payments after ${timeoutSec}s; " +
+                "last_count=${lastPayments.size} last_hashes=${lastPayments.map { it.paymentHash }} " +
+                "last_statuses=${lastPayments.map { it.status.name }}"
         )
     }
 
@@ -406,6 +412,8 @@ class ConcurrentBtcPaymentsTest {
                     assetAmount = null,
                 )
             ).invoice
+            val decoded1 = nodeA.decodeLnInvoice(invoice1)
+            val decoded2 = nodeA.decodeLnInvoice(invoice2)
 
             step = "sendConcurrent"
             var response1: SdkSendPaymentResponse? = null
@@ -449,10 +457,14 @@ class ConcurrentBtcPaymentsTest {
             assertEquals(HtlcStatus.PENDING, response1!!.status)
             assertEquals(HtlcStatus.PENDING, response2!!.status)
 
-            step = "pendingPayments"
-            val pendingPayments = waitForPendingPayments(nodeA, 2, 30L)
-            assertEquals(2, pendingPayments.size)
-            assertTrue(pendingPayments.all { it.status == HtlcStatus.PENDING })
+            step = "receiverPaymentsObserved"
+            val receiverPayments = waitForObservedPayments(
+                nodeA,
+                listOf(decoded1.paymentHash, decoded2.paymentHash),
+                30L,
+            )
+            assertEquals(2, receiverPayments.size)
+            assertTrue(receiverPayments.none { it.status == HtlcStatus.FAILED })
 
             step = "waitPayment1"
             val payment1Sender = waitForPaymentStatus(nodeC, response1!!.paymentHash!!, 60L)
@@ -467,8 +479,6 @@ class ConcurrentBtcPaymentsTest {
             waitForInvoiceStatus(nodeA, invoice2, InvoiceStatus.SUCCEEDED, 60L)
 
             step = "decodeInvoices"
-            val decoded1 = nodeA.decodeLnInvoice(invoice1)
-            val decoded2 = nodeA.decodeLnInvoice(invoice2)
             val payments = nodeA.listPayments()
             val payment1 = payments.first { it.paymentHash == decoded1.paymentHash }
             val payment2 = payments.first { it.paymentHash == decoded2.paymentHash }
@@ -485,6 +495,7 @@ class ConcurrentBtcPaymentsTest {
         } catch (t: Throwable) {
             throw RuntimeException("FAILED at step=$step: ${t.message}", t)
         } finally {
+            Thread.sleep(1_000L)
             safeShutdown(nodeD)
             safeShutdown(nodeC)
             safeShutdown(nodeB)

@@ -35,10 +35,18 @@ ISSUE_ASSET_PRECISION = int(os.getenv("ISSUE_ASSET_PRECISION", "0"))
 ISSUE_ASSET_SUPPLY = int(os.getenv("ISSUE_ASSET_SUPPLY", "1000"))
 OPEN_CHANNEL_ASSET_AMOUNT = int(os.getenv("OPEN_CHANNEL_ASSET_AMOUNT", "200"))
 PAYMENT_ASSET_AMOUNT = int(os.getenv("PAYMENT_ASSET_AMOUNT", "50"))
-OPEN_CHANNEL_CONFIRM_BLOCKS = int(os.getenv("OPEN_CHANNEL_CONFIRM_BLOCKS", "6"))
+OPEN_CHANNEL_CONFIRM_BLOCKS = 6
 CHANNEL_READY_TIMEOUT_SEC = int(os.getenv("CHANNEL_READY_TIMEOUT_SEC", "300"))
 RESET_DATA = os.getenv("RESET_DATA", "1") == "1"
 SCENARIO = os.getenv("PYTHON_E2E_SCENARIO", "payment")
+
+ALL_SCENARIOS = [
+    "payment",
+    "openchannel_push_asset_amount",
+    "getchannelid_fail",
+    "openchannel_fail_no_utxos",
+    "openchannel_fail_unknown_asset",
+]
 
 RGB_MIN_HTLC_MSAT = 3_000_000
 PROXY_ENDPOINT_LOCAL = "rpc://127.0.0.1:3000/json-rpc"
@@ -104,11 +112,19 @@ def init_if_needed(node: rln.SdkNode, password: str, name: str):
 
 
 def unlock_if_needed(node: rln.SdkNode, password: str, name: str):
+    unlock_state = "unlocked"
     try:
         node.unlock(unlock_request(password))
-        print(f"{name}: unlocked")
     except rln.RlnError.Conflict:
-        print(f"{name}: already unlocked")
+        unlock_state = "already unlocked"
+    try:
+        node.node_info()
+    except rln.RlnError.NotInitialized as err:
+        raise RuntimeError(
+            f"{name}: unlock did not leave node usable (state={unlock_state})"
+        ) from err
+    else:
+        print(f"{name}: {unlock_state}")
 
 
 def create_utxos(
@@ -218,6 +234,7 @@ def wait_for_channel_funding_tx(
             None,
         )
         if opening is not None:
+            print(f"channel funding tx found: {opening.funding_txid}")
             return
 
         print("waiting for channel funding tx broadcast...")
@@ -286,6 +303,30 @@ def wait_for_channel_ready(
         time.sleep(1)
     raise RuntimeError(
         f"channel did not become ready after {timeout_sec}s: channel_id={channel_id} last={last}"
+    )
+
+
+def wait_for_channel_id(
+    node: rln.SdkNode,
+    temporary_channel_id,
+    timeout_sec: int = 10,
+):
+    deadline = time.time() + timeout_sec
+    last = "mapping not found"
+    while time.time() < deadline:
+        try:
+            return node.get_channel_id(temporary_channel_id)
+        except rln.RlnError.NotFound:
+            node.sync()
+            channels = node.list_channels()
+            last = ", ".join(
+                f"id={c.channel_id},status={c.status},ready={c.ready},usable={c.is_usable},funding={c.funding_txid}"
+                for c in channels
+            ) or "no channels"
+            time.sleep(1)
+    raise RuntimeError(
+        "temporary_channel_id did not resolve to channel_id after "
+        f"{timeout_sec}s: temporary_channel_id={temporary_channel_id} last_channels={last}"
     )
 
 
@@ -396,6 +437,34 @@ def wait_for_usable_channels(node: rln.SdkNode, expected_count: int, timeout_sec
     raise RuntimeError(
         f"usable channel count did not become expected={expected_count} actual={last_usable} after {timeout_sec}s"
     )
+
+
+def log_channel_state(node: rln.SdkNode, channel_id: str, name: str):
+    node.sync()
+    channel = next((c for c in node.list_channels() if c.channel_id == channel_id), None)
+    if channel is None:
+        print(f"{name} channel: not found channel_id={channel_id}")
+        return
+    print(
+        f"{name} channel: id={channel.channel_id} status={channel.status} ready={channel.ready} "
+        f"usable={channel.is_usable} funding={channel.funding_txid} short_channel_id={channel.short_channel_id} "
+        f"asset_local={channel.asset_local_amount} asset_remote={channel.asset_remote_amount}"
+    )
+
+
+def log_channels(node: rln.SdkNode, name: str):
+    node.sync()
+    channels = node.list_channels()
+    if not channels:
+        print(f"{name}: no channels")
+        return
+    for channel in channels:
+        print(
+            f"{name}: id={channel.channel_id} asset={channel.asset_id} status={channel.status} "
+            f"ready={channel.ready} usable={channel.is_usable} funding={channel.funding_txid} "
+            f"short_channel_id={channel.short_channel_id} asset_local={channel.asset_local_amount} "
+            f"asset_remote={channel.asset_remote_amount}"
+        )
 
 
 def keysend(sender: rln.SdkNode, dest_pubkey: str, amt_msat, asset_id, asset_amount):
@@ -832,16 +901,20 @@ def openchannel_push_asset_amount_scenario():
         )
 
         wait_for_channel_funding_tx(node_a, node_b, asset_id, 120)
+        print(f"Mining {OPEN_CHANNEL_CONFIRM_BLOCKS} blocks for channel confirmations...")
         run_regtest("mine", str(OPEN_CHANNEL_CONFIRM_BLOCKS))
-        wait_for_usable_channel(node_a, node_b, asset_id, 300)
-
-        partial_channel_id = node_a.get_channel_id(partial_push_channel.temporary_channel_id)
+        partial_channel_id = wait_for_channel_id(
+            node_a, partial_push_channel.temporary_channel_id, 10
+        )
+        wait_for_channel_ready(node_a, partial_channel_id, 60)
         node_a_partial = next(c for c in node_a.list_channels() if c.channel_id == partial_channel_id)
         node_b_partial = next(c for c in node_b.list_channels() if c.channel_id == partial_channel_id)
         assert node_a_partial.asset_local_amount == 350 and node_a_partial.asset_remote_amount == 250
         assert node_b_partial.asset_local_amount == 250 and node_b_partial.asset_remote_amount == 350
 
         keysend_with_ln_balance(node_a, node_b, node_b_pubkey, None, asset_id, 100, 350, 250)
+        log_channel_state(node_a, partial_channel_id, "node A partial before btc keysend")
+        log_channel_state(node_b, partial_channel_id, "node B partial before btc keysend")
         btc_payment_hash = keysend(node_a, node_b_pubkey, 10_000_000, None, None)
         wait_for_payment_status(node_b, btc_payment_hash, 60)
         keysend_with_ln_balance(node_b, node_a, node_a_pubkey, None, asset_id, 50, 350, 250)
@@ -870,10 +943,20 @@ def openchannel_push_asset_amount_scenario():
                 push_asset_amount=600,
             )
         )
+        print(
+            "full_push_channel temporary_channel_id: "
+            f"{full_push_channel.temporary_channel_id}"
+        )
 
         wait_for_channel_funding_tx(node_a, node_b, asset_id, 120)
+        print(f"Mining {OPEN_CHANNEL_CONFIRM_BLOCKS} blocks for channel confirmations...")
         run_regtest("mine", str(OPEN_CHANNEL_CONFIRM_BLOCKS))
-        wait_for_usable_channel(node_a, node_b, asset_id, 300)
+        log_channels(node_a, "node A channels before full get_channel_id")
+        log_channels(node_b, "node B channels before full get_channel_id")
+        full_channel_id = wait_for_channel_id(
+            node_a, full_push_channel.temporary_channel_id, 10
+        )
+        wait_for_channel_ready(node_a, full_channel_id, 60)
 
         node_a.shutdown()
         node_b.shutdown()
@@ -888,12 +971,13 @@ def openchannel_push_asset_amount_scenario():
         assert asset_balance_spendable(node_a, asset_id) == 100
         assert asset_balance_spendable(node_b, asset_id) == 300
 
-        full_channel_id = node_a.get_channel_id(full_push_channel.temporary_channel_id)
         node_a_full = next(c for c in node_a.list_channels() if c.channel_id == full_channel_id)
         node_b_full = next(c for c in node_b.list_channels() if c.channel_id == full_channel_id)
         assert node_a_full.asset_local_amount == 0 and node_a_full.asset_remote_amount == 600
         assert node_b_full.asset_local_amount == 600 and node_b_full.asset_remote_amount == 0
 
+        log_channel_state(node_a, full_channel_id, "node A full before btc keysend")
+        log_channel_state(node_b, full_channel_id, "node B full before btc keysend")
         btc_payment_hash = keysend(node_a, node_b_pubkey, 10_000_000, None, None)
         wait_for_payment_status(node_b, btc_payment_hash, 60)
         keysend_with_ln_balance(node_b, node_a, node_a_pubkey, None, asset_id, 100, 600, 0)
@@ -946,23 +1030,25 @@ def openchannel_push_asset_amount_scenario():
         safe_shutdown(node_c)
 
 
+SCENARIO_HANDLERS = {
+    "payment": payment_scenario,
+    "openchannel_push_asset_amount": openchannel_push_asset_amount_scenario,
+    "getchannelid_fail": getchannelid_fail_scenario,
+    "openchannel_fail_no_utxos": openchannel_fail_no_utxos_scenario,
+    "openchannel_fail_unknown_asset": openchannel_fail_unknown_asset_scenario,
+}
+
+
 def main():
-    if SCENARIO == "payment":
-        payment_scenario()
+    if SCENARIO == "all":
+        for scenario in ALL_SCENARIOS:
+            print(f"=== PYTHON_E2E_SCENARIO={scenario} ===")
+            SCENARIO_HANDLERS[scenario]()
         return
-    if SCENARIO == "openchannel_push_asset_amount":
-        openchannel_push_asset_amount_scenario()
-        return
-    if SCENARIO == "getchannelid_fail":
-        getchannelid_fail_scenario()
-        return
-    if SCENARIO == "openchannel_fail_no_utxos":
-        openchannel_fail_no_utxos_scenario()
-        return
-    if SCENARIO == "openchannel_fail_unknown_asset":
-        openchannel_fail_unknown_asset_scenario()
-        return
-    raise RuntimeError(f"Unsupported PYTHON_E2E_SCENARIO={SCENARIO}")
+    try:
+        SCENARIO_HANDLERS[SCENARIO]()
+    except KeyError:
+        raise RuntimeError(f"Unsupported PYTHON_E2E_SCENARIO={SCENARIO}") from None
 
 
 if __name__ == "__main__":
