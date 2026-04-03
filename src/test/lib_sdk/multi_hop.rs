@@ -132,6 +132,7 @@ fn multi_hop() {
                 asset_id: Some(asset_id.clone()),
                 asset_amount: Some(500),
                 push_asset_amount: None,
+                virtual_open_mode: None,
             })
             .expect("node A openchannel to node B");
         wait_for_channel_funding_tx(&node_a, &node_b, &asset_id, Duration::from_secs(120));
@@ -154,6 +155,7 @@ fn multi_hop() {
                 asset_id: Some(asset_id.clone()),
                 asset_amount: Some(300),
                 push_asset_amount: None,
+                virtual_open_mode: None,
             })
             .expect("node B openchannel to node C");
         wait_for_channel_funding_tx(&node_b, &node_c, &asset_id, Duration::from_secs(120));

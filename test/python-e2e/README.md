@@ -29,17 +29,17 @@ Start local regtest services:
 Default scenario:
 
 ```sh
-./scripts/python_uniffi_e2e.sh
+RESET_DATA=1 ./scripts/python_uniffi_e2e.sh
 ```
 
 Run a specific scenario:
 
 ```sh
-PYTHON_E2E_SCENARIO=payment ./scripts/python_uniffi_e2e.sh
-PYTHON_E2E_SCENARIO=openchannel_push_asset_amount ./scripts/python_uniffi_e2e.sh
-PYTHON_E2E_SCENARIO=getchannelid_fail ./scripts/python_uniffi_e2e.sh
-PYTHON_E2E_SCENARIO=openchannel_fail_no_utxos ./scripts/python_uniffi_e2e.sh
-PYTHON_E2E_SCENARIO=openchannel_fail_unknown_asset ./scripts/python_uniffi_e2e.sh
+RESET_DATA=1 PYTHON_E2E_SCENARIO=payment ./scripts/python_uniffi_e2e.sh
+RESET_DATA=1 PYTHON_E2E_SCENARIO=openchannel_push_asset_amount ./scripts/python_uniffi_e2e.sh
+RESET_DATA=1 PYTHON_E2E_SCENARIO=getchannelid_fail ./scripts/python_uniffi_e2e.sh
+RESET_DATA=1 PYTHON_E2E_SCENARIO=openchannel_fail_no_utxos ./scripts/python_uniffi_e2e.sh
+RESET_DATA=1 PYTHON_E2E_SCENARIO=openchannel_fail_unknown_asset ./scripts/python_uniffi_e2e.sh
 ```
 
 Run all scenarios locally:
@@ -51,7 +51,7 @@ cargo build --release --features uniffi --lib
 export PYTHONPATH="$PWD/target/uniffi/python:${PYTHONPATH:-}"
 export LD_LIBRARY_PATH="$PWD/target/release:${LD_LIBRARY_PATH:-}"
 
-PYTHON_E2E_SCENARIO=all python3 test/python-e2e/PythonUniffiE2e.py
+RESET_DATA=1 PYTHON_E2E_SCENARIO=all python3 test/python-e2e/PythonUniffiE2e.py
 ```
 
 ## CI Usage

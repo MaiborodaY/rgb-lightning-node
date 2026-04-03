@@ -28,6 +28,7 @@ import org.utexo.rgblightningnode.SdkRgbInvoiceRequest
 import org.utexo.rgblightningnode.SdkSendPaymentRequest
 import org.utexo.rgblightningnode.SdkUnlockRequest
 import org.utexo.rgblightningnode.SendRgbRequest
+import org.utexo.rgblightningnode.Txid
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -58,7 +59,7 @@ class RestartTest {
     private val utxosNum: UByte = 10u
     private val utxosFeeRate: ULong = 7u
     private val assetSupply: ULong = 1000u
-    private val channelReadyTimeoutSec: Long = 300L
+    private val channelReadyTimeoutSec: Long = 60L
 
     private fun bitcoindRpc(method: String, vararg params: Any): JSONObject {
         val url = URL("http://$bitcoindHost:$bitcoindPort/")
@@ -101,6 +102,8 @@ class RestartTest {
                 ldkPeerListeningPort = peerPort,
                 network = "regtest",
                 maxMediaUploadSizeMb = 20u,
+                enableVirtualChannelsV0 = false,
+                virtualPeerPubkeys = null,
             )
         )
     }
@@ -190,20 +193,36 @@ class RestartTest {
         error("spendable balance did not become expected=$expected actual=$lastBalance")
     }
 
-    private fun waitForChannelFundingTx(nodeA: SdkNode, nodeB: SdkNode, assetId: ContractId, timeoutSec: Long) {
+    private fun waitForChannelFundingTx(nodeA: SdkNode, nodeB: SdkNode, assetId: ContractId, timeoutSec: Long): Txid {
         val deadline = System.currentTimeMillis() + timeoutSec * 1_000L
         while (System.currentTimeMillis() < deadline) {
             nodeA.sync()
             nodeB.sync()
-            val found = nodeA.listChannels().any { it.assetId == assetId && it.fundingTxid != null }
-            if (found) {
-                log("channel funding tx found")
-                return
+            val opening = nodeA.listChannels().firstOrNull { it.assetId == assetId && it.fundingTxid != null }
+            if (opening != null) {
+                log("channel funding tx found: ${opening.fundingTxid}")
+                return requireNotNull(opening.fundingTxid)
             }
             log("waiting for channel funding tx...")
             Thread.sleep(1_000L)
         }
         error("no channel funding tx after ${timeoutSec}s")
+    }
+
+    private fun mineUntilTxConfirmed(node: SdkNode, txid: Txid, timeoutSec: Long = 180L) {
+        val deadline = System.currentTimeMillis() + timeoutSec * 1_000L
+        while (System.currentTimeMillis() < deadline) {
+            node.sync()
+            val tx = node.listTransactions(false).firstOrNull { it.txid == txid }
+            if (tx != null && tx.confirmationTime != null) {
+                log("funding tx confirmed in block: $txid")
+                return
+            }
+            log("waiting for funding tx to be included in a block...")
+            mine(1)
+            Thread.sleep(1_000L)
+        }
+        error("funding tx was not confirmed before timeout: txid=$txid")
     }
 
     private fun waitForUsableChannel(nodeA: SdkNode, nodeB: SdkNode, assetId: ContractId, timeoutSec: Long) {
@@ -379,17 +398,14 @@ class RestartTest {
         var nodeA: SdkNode? = makeNode("restart/node_a", nodeADaemonPort, nodeAPeerPort)
         var nodeB: SdkNode? = makeNode("restart/node_b", nodeBDaemonPort, nodeBPeerPort)
         var nodeC: SdkNode? = makeNode("restart/node_c", nodeCDaemonPort, nodeCPeerPort)
-        var step = "start"
-
         try {
-            step = "initA"; initNode(requireNotNull(nodeA), "nodeApass", "node A")
-            step = "initB"; initNode(requireNotNull(nodeB), "nodeBpass", "node B")
-            step = "initC"; initNode(requireNotNull(nodeC), "nodeCpass", "node C")
-            step = "unlockA"; unlockNode(requireNotNull(nodeA), "nodeApass", "node A")
-            step = "unlockB"; unlockNode(requireNotNull(nodeB), "nodeBpass", "node B")
-            step = "unlockC"; unlockNode(requireNotNull(nodeC), "nodeCpass", "node C")
+            initNode(requireNotNull(nodeA), "nodeApass", "node A")
+            initNode(requireNotNull(nodeB), "nodeBpass", "node B")
+            initNode(requireNotNull(nodeC), "nodeCpass", "node C")
+            unlockNode(requireNotNull(nodeA), "nodeApass", "node A")
+            unlockNode(requireNotNull(nodeB), "nodeBpass", "node B")
+            unlockNode(requireNotNull(nodeC), "nodeCpass", "node C")
 
-            step = "restartAll1"
             safeShutdown(nodeA); safeShutdown(nodeB); safeShutdown(nodeC)
             pauseAfterShutdown()
             nodeA = makeNode("restart/node_a", nodeADaemonPort, nodeAPeerPort)
@@ -399,25 +415,21 @@ class RestartTest {
             unlockNode(requireNotNull(nodeB), "nodeBpass", "node B")
             unlockNode(requireNotNull(nodeC), "nodeCpass", "node C")
 
-            step = "fundA"; fundAndCreateUtxos(requireNotNull(nodeA), "node A")
-            step = "fundB"; fundAndCreateUtxos(requireNotNull(nodeB), "node B")
-            step = "fundC"; fundAndCreateUtxos(requireNotNull(nodeC), "node C")
+            fundAndCreateUtxos(requireNotNull(nodeA), "node A")
+            fundAndCreateUtxos(requireNotNull(nodeB), "node B")
+            fundAndCreateUtxos(requireNotNull(nodeC), "node C")
 
-            step = "issueNia"
             val assetId = issueAssetNia(requireNotNull(nodeA), "node A")
             assertEquals(1000uL, assetBalanceSpendable(requireNotNull(nodeA), assetId))
 
-            step = "restart12_1"
             safeShutdown(nodeA); safeShutdown(nodeB); safeShutdown(nodeC)
             pauseAfterShutdown()
             nodeA = makeNode("restart/node_a", nodeADaemonPort, nodeAPeerPort)
             nodeB = makeNode("restart/node_b", nodeBDaemonPort, nodeBPeerPort)
-            nodeC = null
             unlockNode(requireNotNull(nodeA), "nodeApass", "node A")
             unlockNode(requireNotNull(nodeB), "nodeBpass", "node B")
             assertEquals(1000uL, assetBalanceSpendable(requireNotNull(nodeA), assetId))
 
-            step = "nodeInfo"
             val nodeBPubkey = requireNotNull(nodeB).nodeInfo().pubkey
             val peerUri = "$nodeBPubkey@127.0.0.1:${nodeBPeerPort.toInt()}"
             try {
@@ -427,7 +439,6 @@ class RestartTest {
                 log("connectpeer: already connected")
             }
 
-            step = "openchannel"
             val openResponse = requireNotNull(nodeA).openchannel(
                 SdkOpenChannelRequest(
                     peerPubkeyAndOptAddr = peerUri,
@@ -441,23 +452,23 @@ class RestartTest {
                     assetId = assetId,
                     assetAmount = 600u,
                     pushAssetAmount = null,
+                    virtualOpenMode = null,
                 )
             )
-            waitForChannelFundingTx(requireNotNull(nodeA), requireNotNull(nodeB), assetId, 120L)
+            val fundingTxid = waitForChannelFundingTx(requireNotNull(nodeA), requireNotNull(nodeB), assetId, 120L)
+            log("Mining blocks one by one until funding tx is confirmed...")
+            mineUntilTxConfirmed(requireNotNull(nodeA), fundingTxid)
             mine(openChannelConfirmBlocks)
             waitForUsableChannel(requireNotNull(nodeA), requireNotNull(nodeB), assetId, channelReadyTimeoutSec)
             assertEquals(400uL, assetBalanceSpendable(requireNotNull(nodeA), assetId))
             val channelId = requireNotNull(nodeA).getChannelId(openResponse.temporaryChannelId)
 
-            step = "restart1"
             safeShutdown(nodeA); safeShutdown(nodeB)
             pauseAfterShutdown()
             nodeA = makeNode("restart/node_a", nodeADaemonPort, nodeAPeerPort)
-            nodeB = null
             unlockNode(requireNotNull(nodeA), "nodeApass", "node A")
             waitForChannelReady(requireNotNull(nodeA), channelId, 10L)
 
-            step = "restart12_2"
             safeShutdown(nodeA)
             pauseAfterShutdown()
             nodeA = makeNode("restart/node_a", nodeADaemonPort, nodeAPeerPort)
@@ -469,7 +480,6 @@ class RestartTest {
             waitForUsableChannels(requireNotNull(nodeB), 1, 60L)
             assertEquals(400uL, assetBalanceSpendable(requireNotNull(nodeA), assetId))
 
-            step = "lnInvoice"
             val invoice = requireNotNull(nodeB).lnInvoice(
                 LnInvoiceRequest(
                     amtMsat = paymentMsat,
@@ -478,7 +488,6 @@ class RestartTest {
                     assetAmount = 100u,
                 )
             ).invoice
-            step = "sendPayment"
             val sendPayment = requireNotNull(nodeA).sendpayment(
                 SdkSendPaymentRequest(
                     invoice = invoice,
@@ -490,35 +499,25 @@ class RestartTest {
             val paymentHash = requireNotNull(sendPayment.paymentHash)
             waitForPaymentStatus(requireNotNull(nodeA), paymentHash, 60L)
 
-            step = "restart12_3"
             safeShutdown(nodeA); safeShutdown(nodeB)
             pauseAfterShutdown()
             nodeA = makeNode("restart/node_a", nodeADaemonPort, nodeAPeerPort)
             nodeB = makeNode("restart/node_b", nodeBDaemonPort, nodeBPeerPort)
             log("restart12_3: recreated node A and node B")
-            step = "restart12_3_unlockA"
             unlockNode(requireNotNull(nodeA), "nodeApass", "node A")
             log("restart12_3: node A unlocked")
-            step = "restart12_3_unlockB"
             unlockNode(requireNotNull(nodeB), "nodeBpass", "node B")
             log("restart12_3: node B unlocked")
-            step = "restart12_3_waitReady"
             waitForChannelReady(requireNotNull(nodeA), channelId, 10L)
-            step = "restart12_3_waitUsableA"
             waitForUsableChannels(requireNotNull(nodeA), 1, 60L)
-            step = "restart12_3_waitUsableB"
             waitForUsableChannels(requireNotNull(nodeB), 1, 60L)
-            step = "restart12_3_paymentListA"
             waitForSucceededPaymentInList(requireNotNull(nodeA), paymentHash, 30L)
-            step = "restart12_3_paymentListB"
             waitForSucceededPaymentInList(requireNotNull(nodeB), paymentHash, 30L)
 
-            step = "closeChannel"
             closeChannel(requireNotNull(nodeA), channelId, nodeBPubkey)
             waitForBalance(requireNotNull(nodeA), assetId, 900uL, 70L)
             waitForBalance(requireNotNull(nodeB), assetId, 100uL, 70L)
 
-            step = "restartAll2"
             safeShutdown(nodeA); safeShutdown(nodeB)
             pauseAfterShutdown()
             nodeA = makeNode("restart/node_a", nodeADaemonPort, nodeAPeerPort)
@@ -530,7 +529,6 @@ class RestartTest {
             assertEquals(900uL, assetBalanceSpendable(requireNotNull(nodeA), assetId))
             assertEquals(100uL, assetBalanceSpendable(requireNotNull(nodeB), assetId))
 
-            step = "sendRgbAtoC"
             val recipientIdA = rgbInvoice(requireNotNull(nodeC))
             sendRgb(requireNotNull(nodeA), assetId, recipientIdA, 700u)
             mine(1)
@@ -538,7 +536,6 @@ class RestartTest {
             refreshTransfers(requireNotNull(nodeC))
             refreshTransfers(requireNotNull(nodeA))
 
-            step = "sendRgbBtoC"
             val recipientIdB = rgbInvoice(requireNotNull(nodeC))
             sendRgb(requireNotNull(nodeB), assetId, recipientIdB, 50u)
             mine(1)
@@ -546,7 +543,6 @@ class RestartTest {
             refreshTransfers(requireNotNull(nodeC))
             refreshTransfers(requireNotNull(nodeB))
 
-            step = "restartAll3"
             safeShutdown(nodeA); safeShutdown(nodeB); safeShutdown(nodeC)
             pauseAfterShutdown()
             nodeA = makeNode("restart/node_a", nodeADaemonPort, nodeAPeerPort)
@@ -560,8 +556,6 @@ class RestartTest {
             assertEquals(750uL, assetBalanceSpendable(requireNotNull(nodeC), assetId))
 
             log("SUCCESS: Android restart completed")
-        } catch (e: Exception) {
-            throw RuntimeException("FAILED at step=$step: ${e.message}", e)
         } finally {
             safeShutdown(nodeA)
             safeShutdown(nodeB)

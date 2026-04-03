@@ -5,9 +5,6 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 JNA_JAR="${JNA_JAR:-/usr/share/java/jna.jar}"
-E2E_DIR="target/uniffi/kotlin-e2e"
-E2E_JAR="$E2E_DIR/e2e.jar"
-MAIN_SRC="test/kotlin-e2e/KotlinUniffiE2e.kt"
 
 need_cmd() {
     command -v "$1" >/dev/null 2>&1 || {
@@ -44,26 +41,5 @@ need_cmd docker
 
 ensure_regtest_available
 
-cargo build --release --features uniffi --lib
-./scripts/ci/uniffi_generate_kotlin.sh
-
-mkdir -p "$E2E_DIR"
-
-mapfile -t GENERATED_SOURCES < <(find target/uniffi/kotlin -type f -name '*.kt' | sort)
-[ "${#GENERATED_SOURCES[@]}" -gt 0 ] || {
-    echo "ERROR: no generated Kotlin sources found under target/uniffi/kotlin"
-    exit 1
-}
-
-kotlinc \
-  -cp "$JNA_JAR" \
-  "${GENERATED_SOURCES[@]}" \
-  "$MAIN_SRC" \
-  -include-runtime \
-  -d "$E2E_JAR"
-
-LD_LIBRARY_PATH="$ROOT_DIR/target/release:${LD_LIBRARY_PATH:-}" \
-java \
-  -Djna.library.path="$ROOT_DIR/target/release" \
-  -cp "$E2E_JAR:$JNA_JAR" \
-  KotlinUniffiE2eKt
+JNA_JAR="$JNA_JAR" ./scripts/ci/build_kotlin_e2e.sh
+JNA_JAR="$JNA_JAR" ./scripts/ci/run_kotlin_e2e.sh

@@ -28,9 +28,14 @@ cargo test --features uniffi --test lib_sdk <test_name> -- --test-threads=1
 Examples of `<test_name>`:
 - `success`
 - `send_receive`
+- `close_coop_standard`
+- `close_coop_other_side`
+- `close_force_standard`
 - `multi_hop`
+- `openchannel_push_asset_amount`
 - `restart`
 - `swap_roundtrip_buy`
+- `vanilla_payment_on_rgb_channel`
 - `with_anchors`
 - `without_anchors`
 

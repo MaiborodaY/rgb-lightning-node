@@ -8,7 +8,20 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.utexo.rgblightningnode.*
+import org.utexo.rgblightningnode.Channel
+import org.utexo.rgblightningnode.HtlcStatus
+import org.utexo.rgblightningnode.InvoiceStatus
+import org.utexo.rgblightningnode.LnInvoiceRequest
+import org.utexo.rgblightningnode.Payment
+import org.utexo.rgblightningnode.PaymentHash
+import org.utexo.rgblightningnode.RlnException
+import org.utexo.rgblightningnode.SdkCreateUtxosRequest
+import org.utexo.rgblightningnode.SdkInitRequest
+import org.utexo.rgblightningnode.SdkNode
+import org.utexo.rgblightningnode.SdkOpenChannelRequest
+import org.utexo.rgblightningnode.SdkSendPaymentRequest
+import org.utexo.rgblightningnode.SdkSendPaymentResponse
+import org.utexo.rgblightningnode.SdkUnlockRequest
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -41,7 +54,7 @@ class ConcurrentBtcPaymentsTest {
     private val invoiceAmtMsat2: ULong = 5_000_000u
     private val utxosNum: UByte = 10u
     private val utxosFeeRate: ULong = 7u
-    private val channelReadyTimeoutSec: Long = 300L
+    private val channelReadyTimeoutSec: Long = 60L
 
     private fun bitcoindRpc(method: String, vararg params: Any): JSONObject {
         val url = URL("http://$bitcoindHost:$bitcoindPort/")
@@ -70,6 +83,10 @@ class ConcurrentBtcPaymentsTest {
         log("mined $blocks block(s)")
     }
 
+    private fun getTxOut(txid: String): String {
+        return bitcoindRpc("gettxout", txid, 0).opt("result")?.toString() ?: ""
+    }
+
     private fun sendToAddress(address: String, amountBtc: String) {
         bitcoindRpc("sendtoaddress", address, amountBtc.toDouble())
         log("sent $amountBtc BTC to $address")
@@ -83,6 +100,8 @@ class ConcurrentBtcPaymentsTest {
                 ldkPeerListeningPort = peerPort,
                 network = "regtest",
                 maxMediaUploadSizeMb = 20u,
+                enableVirtualChannelsV0 = false,
+                virtualPeerPubkeys = null,
             )
         )
     }
@@ -152,16 +171,19 @@ class ConcurrentBtcPaymentsTest {
 
     private fun waitForChannelFundingTx(
         node: SdkNode,
+        peerNode: SdkNode,
         matcher: (Channel) -> Boolean,
         timeoutSec: Long,
-    ) {
+    ): String {
         val deadline = System.currentTimeMillis() + timeoutSec * 1_000L
         while (System.currentTimeMillis() < deadline) {
             node.sync()
-            val found = node.listChannels().any { matcher(it) && it.fundingTxid != null }
-            if (found) {
-                log("channel funding tx found")
-                return
+            peerNode.sync()
+            val opening = node.listChannels().firstOrNull { matcher(it) && it.fundingTxid != null }
+            if (opening != null) {
+                val fundingTxid = requireNotNull(opening.fundingTxid)
+                log("channel funding tx found: $fundingTxid")
+                return fundingTxid
             }
             log("waiting for channel funding tx...")
             Thread.sleep(1_000L)
@@ -169,8 +191,24 @@ class ConcurrentBtcPaymentsTest {
         error("no channel funding tx after ${timeoutSec}s")
     }
 
+    private fun mineUntilTxConfirmed(txid: String, timeoutSec: Long = 180L) {
+        val deadline = System.currentTimeMillis() + timeoutSec * 1_000L
+        while (System.currentTimeMillis() < deadline) {
+            val txOut = getTxOut(txid)
+            if (txOut.isNotBlank()) {
+                log("funding tx confirmed in block: $txid")
+                return
+            }
+            log("waiting for funding tx to be included in a block...")
+            mine(1)
+            Thread.sleep(1_000L)
+        }
+        error("funding tx was not confirmed before timeout: txid=$txid")
+    }
+
     private fun waitForUsableChannel(
         node: SdkNode,
+        peerNode: SdkNode,
         matcher: (Channel) -> Boolean,
         timeoutSec: Long,
     ) {
@@ -179,6 +217,7 @@ class ConcurrentBtcPaymentsTest {
         while (System.currentTimeMillis() < deadline) {
             polls++
             node.sync()
+            peerNode.sync()
             val usable = node.listChannels().any { matcher(it) && it.isUsable }
             if (usable) {
                 log("channel is usable")
@@ -298,33 +337,30 @@ class ConcurrentBtcPaymentsTest {
         val nodeB = makeNode("concurrent_btc_payments/node_b", nodeBDaemonPort, nodeBPeerPort)
         val nodeC = makeNode("concurrent_btc_payments/node_c", nodeCDaemonPort, nodeCPeerPort)
         val nodeD = makeNode("concurrent_btc_payments/node_d", nodeDDaemonPort, nodeDPeerPort)
-        var step = "start"
         try {
-            step = "initA"; initNode(nodeA, "nodeApass", "node A")
-            step = "initB"; initNode(nodeB, "nodeBpass", "node B")
-            step = "initC"; initNode(nodeC, "nodeCpass", "node C")
-            step = "initD"; initNode(nodeD, "nodeDpass", "node D")
-            step = "unlockA"; unlockNode(nodeA, "nodeApass", "node A")
-            step = "unlockB"; unlockNode(nodeB, "nodeBpass", "node B")
-            step = "unlockC"; unlockNode(nodeC, "nodeCpass", "node C")
-            step = "unlockD"; unlockNode(nodeD, "nodeDpass", "node D")
+            initNode(nodeA, "nodeApass", "node A")
+            initNode(nodeB, "nodeBpass", "node B")
+            initNode(nodeC, "nodeCpass", "node C")
+            initNode(nodeD, "nodeDpass", "node D")
+            unlockNode(nodeA, "nodeApass", "node A")
+            unlockNode(nodeB, "nodeBpass", "node B")
+            unlockNode(nodeC, "nodeCpass", "node C")
+            unlockNode(nodeD, "nodeDpass", "node D")
 
-            step = "fundA"; fundAndCreateUtxos(nodeA, "node A")
-            step = "fundB"; fundAndCreateUtxos(nodeB, "node B")
-            step = "fundC"; fundAndCreateUtxos(nodeC, "node C")
-            step = "fundD"; fundAndCreateUtxos(nodeD, "node D")
+            fundAndCreateUtxos(nodeA, "node A")
+            fundAndCreateUtxos(nodeB, "node B")
+            fundAndCreateUtxos(nodeC, "node C")
+            fundAndCreateUtxos(nodeD, "node D")
 
-            step = "nodeInfo"
             val infoA = nodeA.nodeInfo()
             val infoB = nodeB.nodeInfo()
             log("node A pubkey: ${infoA.pubkey}")
             log("node B pubkey: ${infoB.pubkey}")
 
-            step = "connectBtoA"; connectPeer(nodeB, infoA.pubkey, nodeAPeerPort, "node B")
-            step = "connectCtoB"; connectPeer(nodeC, infoB.pubkey, nodeBPeerPort, "node C")
-            step = "connectDtoB"; connectPeer(nodeD, infoB.pubkey, nodeBPeerPort, "node D")
+            connectPeer(nodeB, infoA.pubkey, nodeAPeerPort, "node B")
+            connectPeer(nodeC, infoB.pubkey, nodeBPeerPort, "node C")
+            connectPeer(nodeD, infoB.pubkey, nodeBPeerPort, "node D")
 
-            step = "openBtoA"
             val openBtoA = nodeB.openchannel(
                 SdkOpenChannelRequest(
                     peerPubkeyAndOptAddr = "${infoA.pubkey}@127.0.0.1:${nodeAPeerPort.toInt()}",
@@ -338,14 +374,25 @@ class ConcurrentBtcPaymentsTest {
                     assetId = null,
                     assetAmount = null,
                     pushAssetAmount = null,
+                    virtualOpenMode = null,
                 )
             )
-            step = "waitFundingBtoA"
-            waitForChannelFundingTx(nodeB, { it.peerPubkey == infoA.pubkey && it.assetId == null }, 120L)
-            step = "waitUsableBtoA"
-            waitForUsableChannel(nodeB, { it.channelId == nodeB.getChannelId(openBtoA.temporaryChannelId) }, channelReadyTimeoutSec)
+            val fundingTxidBtoA = waitForChannelFundingTx(
+                nodeB,
+                nodeA,
+                { it.peerPubkey == infoA.pubkey && it.assetId == null },
+                120L,
+            )
+            log("Mining blocks one by one until funding tx is confirmed...")
+            mineUntilTxConfirmed(fundingTxidBtoA)
+            mine(6)
+            waitForUsableChannel(
+                nodeB,
+                nodeA,
+                { it.channelId == nodeB.getChannelId(openBtoA.temporaryChannelId) },
+                channelReadyTimeoutSec,
+            )
 
-            step = "openCtoB"
             val openCtoB = nodeC.openchannel(
                 SdkOpenChannelRequest(
                     peerPubkeyAndOptAddr = "${infoB.pubkey}@127.0.0.1:${nodeBPeerPort.toInt()}",
@@ -359,14 +406,25 @@ class ConcurrentBtcPaymentsTest {
                     assetId = null,
                     assetAmount = null,
                     pushAssetAmount = null,
+                    virtualOpenMode = null,
                 )
             )
-            step = "waitFundingCtoB"
-            waitForChannelFundingTx(nodeC, { it.peerPubkey == infoB.pubkey && it.assetId == null }, 120L)
-            step = "waitUsableCtoB"
-            waitForUsableChannel(nodeC, { it.channelId == nodeC.getChannelId(openCtoB.temporaryChannelId) }, channelReadyTimeoutSec)
+            val fundingTxidCtoB = waitForChannelFundingTx(
+                nodeC,
+                nodeB,
+                { it.peerPubkey == infoB.pubkey && it.assetId == null },
+                120L,
+            )
+            log("Mining blocks one by one until funding tx is confirmed...")
+            mineUntilTxConfirmed(fundingTxidCtoB)
+            mine(6)
+            waitForUsableChannel(
+                nodeC,
+                nodeB,
+                { it.channelId == nodeC.getChannelId(openCtoB.temporaryChannelId) },
+                channelReadyTimeoutSec,
+            )
 
-            step = "openDtoB"
             val openDtoB = nodeD.openchannel(
                 SdkOpenChannelRequest(
                     peerPubkeyAndOptAddr = "${infoB.pubkey}@127.0.0.1:${nodeBPeerPort.toInt()}",
@@ -380,20 +438,30 @@ class ConcurrentBtcPaymentsTest {
                     assetId = null,
                     assetAmount = null,
                     pushAssetAmount = null,
+                    virtualOpenMode = null,
                 )
             )
-            step = "waitFundingDtoB"
-            waitForChannelFundingTx(nodeD, { it.peerPubkey == infoB.pubkey && it.assetId == null }, 120L)
-            step = "waitUsableDtoB"
-            waitForUsableChannel(nodeD, { it.channelId == nodeD.getChannelId(openDtoB.temporaryChannelId) }, channelReadyTimeoutSec)
+            val fundingTxidDtoB = waitForChannelFundingTx(
+                nodeD,
+                nodeB,
+                { it.peerPubkey == infoB.pubkey && it.assetId == null },
+                120L,
+            )
+            log("Mining blocks one by one until funding tx is confirmed...")
+            mineUntilTxConfirmed(fundingTxidDtoB)
+            mine(6)
+            waitForUsableChannel(
+                nodeD,
+                nodeB,
+                { it.channelId == nodeD.getChannelId(openDtoB.temporaryChannelId) },
+                channelReadyTimeoutSec,
+            )
 
-            step = "channelsBefore"
             val channelsA = nodeA.listChannels()
             assertEquals(1, channelsA.size)
             val channelA = channelsA.first()
             assertEquals(0uL, channelA.localBalanceSat)
 
-            step = "invoice1"
             val invoice1 = nodeA.lnInvoice(
                 LnInvoiceRequest(
                     amtMsat = invoiceAmtMsat1,
@@ -403,7 +471,6 @@ class ConcurrentBtcPaymentsTest {
                 )
             ).invoice
 
-            step = "invoice2"
             val invoice2 = nodeA.lnInvoice(
                 LnInvoiceRequest(
                     amtMsat = invoiceAmtMsat2,
@@ -415,7 +482,6 @@ class ConcurrentBtcPaymentsTest {
             val decoded1 = nodeA.decodeLnInvoice(invoice1)
             val decoded2 = nodeA.decodeLnInvoice(invoice2)
 
-            step = "sendConcurrent"
             var response1: SdkSendPaymentResponse? = null
             var response2: SdkSendPaymentResponse? = null
             var error1: Throwable? = null
@@ -457,7 +523,6 @@ class ConcurrentBtcPaymentsTest {
             assertEquals(HtlcStatus.PENDING, response1!!.status)
             assertEquals(HtlcStatus.PENDING, response2!!.status)
 
-            step = "receiverPaymentsObserved"
             val receiverPayments = waitForObservedPayments(
                 nodeA,
                 listOf(decoded1.paymentHash, decoded2.paymentHash),
@@ -466,19 +531,14 @@ class ConcurrentBtcPaymentsTest {
             assertEquals(2, receiverPayments.size)
             assertTrue(receiverPayments.none { it.status == HtlcStatus.FAILED })
 
-            step = "waitPayment1"
             val payment1Sender = waitForPaymentStatus(nodeC, response1!!.paymentHash!!, 60L)
-            step = "waitPayment2"
             val payment2Sender = waitForPaymentStatus(nodeD, response2!!.paymentHash!!, 60L)
             assertEquals(HtlcStatus.SUCCEEDED, payment1Sender.status)
             assertEquals(HtlcStatus.SUCCEEDED, payment2Sender.status)
 
-            step = "invoiceStatus1"
             waitForInvoiceStatus(nodeA, invoice1, InvoiceStatus.SUCCEEDED, 60L)
-            step = "invoiceStatus2"
             waitForInvoiceStatus(nodeA, invoice2, InvoiceStatus.SUCCEEDED, 60L)
 
-            step = "decodeInvoices"
             val payments = nodeA.listPayments()
             val payment1 = payments.first { it.paymentHash == decoded1.paymentHash }
             val payment2 = payments.first { it.paymentHash == decoded2.paymentHash }
@@ -487,13 +547,10 @@ class ConcurrentBtcPaymentsTest {
             assertEquals(HtlcStatus.SUCCEEDED, payment1.status)
             assertEquals(HtlcStatus.SUCCEEDED, payment2.status)
 
-            step = "channelBalanceAfter"
             waitForChannelLocalBalanceMsat(nodeA, channelA.channelId, invoiceAmtMsat1 + invoiceAmtMsat2, 30L)
             val channelsAfter = nodeA.listChannels()
             assertEquals(1, channelsAfter.size)
             assertEquals(invoiceAmtMsat1 + invoiceAmtMsat2, channelsAfter.first().localBalanceSat * 1000u)
-        } catch (t: Throwable) {
-            throw RuntimeException("FAILED at step=$step: ${t.message}", t)
         } finally {
             Thread.sleep(1_000L)
             safeShutdown(nodeD)

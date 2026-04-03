@@ -84,6 +84,8 @@ def make_node(storage_dir: Path, daemon_port: int, peer_port: int) -> rln.SdkNod
         ldk_peer_listening_port=peer_port,
         network="regtest",
         max_media_upload_size_mb=20,
+        enable_virtual_channels_v0=False,
+        virtual_peer_pubkeys=None,
     )
     return rln.SdkNode.create(req)
 
@@ -235,7 +237,7 @@ def wait_for_channel_funding_tx(
         )
         if opening is not None:
             print(f"channel funding tx found: {opening.funding_txid}")
-            return
+            return str(opening.funding_txid)
 
         print("waiting for channel funding tx broadcast...")
         time.sleep(1)
@@ -243,6 +245,25 @@ def wait_for_channel_funding_tx(
     raise RuntimeError(
         f"No funding tx after {timeout_sec}s for asset_id={asset_id}; last_channels={last}"
     )
+
+
+def mine_until_tx_confirmed(
+    node: rln.SdkNode,
+    txid: str,
+    timeout_sec: int = 180,
+):
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        node.sync()
+        transactions = node.list_transactions(False)
+        tx = next((t for t in transactions if str(t.txid) == str(txid)), None)
+        if tx is not None and tx.confirmation_time is not None:
+            print(f"funding tx confirmed in block: {txid}")
+            return
+        print("waiting for funding tx to be included in a block...")
+        run_regtest("mine", "1")
+        time.sleep(1)
+    raise RuntimeError(f"funding tx was not confirmed before timeout: txid={txid}")
 
 
 def wait_for_usable_channel(
@@ -439,34 +460,6 @@ def wait_for_usable_channels(node: rln.SdkNode, expected_count: int, timeout_sec
     )
 
 
-def log_channel_state(node: rln.SdkNode, channel_id: str, name: str):
-    node.sync()
-    channel = next((c for c in node.list_channels() if c.channel_id == channel_id), None)
-    if channel is None:
-        print(f"{name} channel: not found channel_id={channel_id}")
-        return
-    print(
-        f"{name} channel: id={channel.channel_id} status={channel.status} ready={channel.ready} "
-        f"usable={channel.is_usable} funding={channel.funding_txid} short_channel_id={channel.short_channel_id} "
-        f"asset_local={channel.asset_local_amount} asset_remote={channel.asset_remote_amount}"
-    )
-
-
-def log_channels(node: rln.SdkNode, name: str):
-    node.sync()
-    channels = node.list_channels()
-    if not channels:
-        print(f"{name}: no channels")
-        return
-    for channel in channels:
-        print(
-            f"{name}: id={channel.channel_id} asset={channel.asset_id} status={channel.status} "
-            f"ready={channel.ready} usable={channel.is_usable} funding={channel.funding_txid} "
-            f"short_channel_id={channel.short_channel_id} asset_local={channel.asset_local_amount} "
-            f"asset_remote={channel.asset_remote_amount}"
-        )
-
-
 def keysend(sender: rln.SdkNode, dest_pubkey: str, amt_msat, asset_id, asset_amount):
     response = sender.keysend(
         rln.SdkKeysendRequest(
@@ -628,13 +621,14 @@ def openchannel_fail_no_utxos_scenario():
                     public=True,
                     with_anchors=True,
                     fee_base_msat=None,
-                    fee_proportional_millionths=None,
-                    temporary_channel_id=None,
-                    asset_id=asset_id,
-                    asset_amount=100,
-                    push_asset_amount=None,
-                )
+                fee_proportional_millionths=None,
+                temporary_channel_id=None,
+                asset_id=asset_id,
+                asset_amount=100,
+                push_asset_amount=None,
+                virtual_open_mode=None,
             )
+        )
             raise RuntimeError("openchannel should fail when no uncolored UTXOs are available")
         except rln.RlnError.Conflict:
             pass
@@ -688,13 +682,14 @@ def openchannel_fail_unknown_asset_scenario():
                     public=True,
                     with_anchors=True,
                     fee_base_msat=None,
-                    fee_proportional_millionths=None,
-                    temporary_channel_id=None,
-                    asset_id="rgb:EIkAVQvq-WbAb5JG-CYxbUER-oqDNwne-ZNxBDID-p0cpf9U",
-                    asset_amount=100,
-                    push_asset_amount=None,
-                )
+                fee_proportional_millionths=None,
+                temporary_channel_id=None,
+                asset_id="rgb:EIkAVQvq-WbAb5JG-CYxbUER-oqDNwne-ZNxBDID-p0cpf9U",
+                asset_amount=100,
+                push_asset_amount=None,
+                virtual_open_mode=None,
             )
+        )
             raise RuntimeError("openchannel should fail for unknown asset id")
         except rln.RlnError.NotFound:
             pass
@@ -768,11 +763,14 @@ def payment_scenario():
                 asset_id=asset_id,
                 asset_amount=OPEN_CHANNEL_ASSET_AMOUNT,
                 push_asset_amount=None,
+                virtual_open_mode=None,
             )
         )
         print(f"openchannel temporary_channel_id: {open_response.temporary_channel_id}")
 
-        wait_for_channel_funding_tx(node_a, node_b, asset_id, 120)
+        funding_txid = wait_for_channel_funding_tx(node_a, node_b, asset_id, 120)
+        print("Mining blocks one by one until funding tx is confirmed...")
+        mine_until_tx_confirmed(node_a, funding_txid, 180)
         print(f"Mining {OPEN_CHANNEL_CONFIRM_BLOCKS} blocks for channel confirmations...")
         run_regtest("mine", str(OPEN_CHANNEL_CONFIRM_BLOCKS))
         channel_id = node_a.get_channel_id(open_response.temporary_channel_id)
@@ -897,10 +895,13 @@ def openchannel_push_asset_amount_scenario():
                 asset_id=asset_id,
                 asset_amount=600,
                 push_asset_amount=250,
+                virtual_open_mode=None,
             )
         )
 
-        wait_for_channel_funding_tx(node_a, node_b, asset_id, 120)
+        funding_txid = wait_for_channel_funding_tx(node_a, node_b, asset_id, 120)
+        print("Mining blocks one by one until funding tx is confirmed...")
+        mine_until_tx_confirmed(node_a, funding_txid, 180)
         print(f"Mining {OPEN_CHANNEL_CONFIRM_BLOCKS} blocks for channel confirmations...")
         run_regtest("mine", str(OPEN_CHANNEL_CONFIRM_BLOCKS))
         partial_channel_id = wait_for_channel_id(
@@ -913,8 +914,6 @@ def openchannel_push_asset_amount_scenario():
         assert node_b_partial.asset_local_amount == 250 and node_b_partial.asset_remote_amount == 350
 
         keysend_with_ln_balance(node_a, node_b, node_b_pubkey, None, asset_id, 100, 350, 250)
-        log_channel_state(node_a, partial_channel_id, "node A partial before btc keysend")
-        log_channel_state(node_b, partial_channel_id, "node B partial before btc keysend")
         btc_payment_hash = keysend(node_a, node_b_pubkey, 10_000_000, None, None)
         wait_for_payment_status(node_b, btc_payment_hash, 60)
         keysend_with_ln_balance(node_b, node_a, node_a_pubkey, None, asset_id, 50, 350, 250)
@@ -941,6 +940,7 @@ def openchannel_push_asset_amount_scenario():
                 asset_id=asset_id,
                 asset_amount=600,
                 push_asset_amount=600,
+                virtual_open_mode=None,
             )
         )
         print(
@@ -948,11 +948,11 @@ def openchannel_push_asset_amount_scenario():
             f"{full_push_channel.temporary_channel_id}"
         )
 
-        wait_for_channel_funding_tx(node_a, node_b, asset_id, 120)
+        funding_txid = wait_for_channel_funding_tx(node_a, node_b, asset_id, 120)
+        print("Mining blocks one by one until funding tx is confirmed...")
+        mine_until_tx_confirmed(node_a, funding_txid, 180)
         print(f"Mining {OPEN_CHANNEL_CONFIRM_BLOCKS} blocks for channel confirmations...")
         run_regtest("mine", str(OPEN_CHANNEL_CONFIRM_BLOCKS))
-        log_channels(node_a, "node A channels before full get_channel_id")
-        log_channels(node_b, "node B channels before full get_channel_id")
         full_channel_id = wait_for_channel_id(
             node_a, full_push_channel.temporary_channel_id, 10
         )
@@ -976,8 +976,6 @@ def openchannel_push_asset_amount_scenario():
         assert node_a_full.asset_local_amount == 0 and node_a_full.asset_remote_amount == 600
         assert node_b_full.asset_local_amount == 600 and node_b_full.asset_remote_amount == 0
 
-        log_channel_state(node_a, full_channel_id, "node A full before btc keysend")
-        log_channel_state(node_b, full_channel_id, "node B full before btc keysend")
         btc_payment_hash = keysend(node_a, node_b_pubkey, 10_000_000, None, None)
         wait_for_payment_status(node_b, btc_payment_hash, 60)
         keysend_with_ln_balance(node_b, node_a, node_a_pubkey, None, asset_id, 100, 600, 0)

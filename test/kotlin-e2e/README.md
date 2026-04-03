@@ -38,14 +38,37 @@ export JNA_JAR=/path/to/jna.jar
 Default scenario:
 
 ```sh
-./scripts/kotlin_uniffi_e2e.sh
+RESET_DATA=1 ./scripts/kotlin_uniffi_e2e.sh
 ```
 
 Run a specific scenario:
 
 ```sh
-KOTLIN_E2E_SCENARIO=<scenario_name> ./scripts/kotlin_uniffi_e2e.sh
+RESET_DATA=1 KOTLIN_E2E_SCENARIO=<scenario_name> ./scripts/kotlin_uniffi_e2e.sh
 ```
+
+## CI Usage
+
+Recommended CI shape:
+- build Kotlin E2E artifacts once:
+
+```sh
+JNA_JAR=/usr/share/java/jna.jar ./scripts/ci/build_kotlin_e2e.sh
+```
+
+- upload:
+  - `target/release/librgb_lightning_node.so`
+  - `target/uniffi/kotlin-e2e/e2e.jar`
+- fan out with a matrix over scenarios
+- in each matrix job:
+  - start regtest
+  - run one scenario with:
+
+```sh
+RESET_DATA=1 KOTLIN_E2E_SCENARIO=<scenario_name> JNA_JAR=/usr/share/java/jna.jar ./scripts/ci/run_kotlin_e2e.sh
+```
+
+  - stop regtest with `if: always()`
 
 ## Cleanup
 

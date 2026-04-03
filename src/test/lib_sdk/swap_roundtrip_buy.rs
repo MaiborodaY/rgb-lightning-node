@@ -110,6 +110,7 @@ fn swap_roundtrip_buy() {
                 asset_id: Some(asset_id.clone()),
                 asset_amount: Some(600),
                 push_asset_amount: None,
+                virtual_open_mode: None,
             })
             .expect("node A openchannel 12");
         let channel_id_12 = wait_for_channel_open(
@@ -137,6 +138,7 @@ fn swap_roundtrip_buy() {
                 asset_id: None,
                 asset_amount: None,
                 push_asset_amount: None,
+                virtual_open_mode: None,
             })
             .expect("node B openchannel 21");
         let channel_id_21 = wait_for_channel_open(

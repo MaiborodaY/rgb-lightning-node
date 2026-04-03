@@ -27,6 +27,7 @@ import org.utexo.rgblightningnode.SdkRefreshTransfersRequest
 import org.utexo.rgblightningnode.SdkRgbInvoiceRequest
 import org.utexo.rgblightningnode.SdkUnlockRequest
 import org.utexo.rgblightningnode.SendRgbRequest
+import org.utexo.rgblightningnode.Txid
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -57,7 +58,7 @@ class MultiOpenCloseTest {
     private val utxosNum: UByte = 10u
     private val utxosFeeRate: ULong = 7u
     private val assetSupply: ULong = 1000u
-    private val channelReadyTimeoutSec: Long = 300L
+    private val channelReadyTimeoutSec: Long = 60L
 
     private fun bitcoindRpc(method: String, vararg params: Any): JSONObject {
         val url = URL("http://$bitcoindHost:$bitcoindPort/")
@@ -100,6 +101,8 @@ class MultiOpenCloseTest {
                 ldkPeerListeningPort = peerPort,
                 network = "regtest",
                 maxMediaUploadSizeMb = 20u,
+                enableVirtualChannelsV0 = false,
+                virtualPeerPubkeys = null,
             )
         )
     }
@@ -189,20 +192,36 @@ class MultiOpenCloseTest {
         error("spendable balance did not become expected=$expected actual=$lastBalance")
     }
 
-    private fun waitForChannelFundingTx(nodeA: SdkNode, nodeB: SdkNode, assetId: ContractId, timeoutSec: Long) {
+    private fun waitForChannelFundingTx(nodeA: SdkNode, nodeB: SdkNode, assetId: ContractId, timeoutSec: Long): Txid {
         val deadline = System.currentTimeMillis() + timeoutSec * 1_000L
         while (System.currentTimeMillis() < deadline) {
             nodeA.sync()
             nodeB.sync()
-            val found = nodeA.listChannels().any { it.assetId == assetId && it.fundingTxid != null }
-            if (found) {
-                log("channel funding tx found")
-                return
+            val opening = nodeA.listChannels().firstOrNull { it.assetId == assetId && it.fundingTxid != null }
+            if (opening != null) {
+                log("channel funding tx found: ${opening.fundingTxid}")
+                return requireNotNull(opening.fundingTxid)
             }
             log("waiting for channel funding tx...")
             Thread.sleep(1_000L)
         }
         error("no channel funding tx after ${timeoutSec}s")
+    }
+
+    private fun mineUntilTxConfirmed(node: SdkNode, txid: Txid, timeoutSec: Long = 180L) {
+        val deadline = System.currentTimeMillis() + timeoutSec * 1_000L
+        while (System.currentTimeMillis() < deadline) {
+            node.sync()
+            val tx = node.listTransactions(false).firstOrNull { it.txid == txid }
+            if (tx != null && tx.confirmationTime != null) {
+                log("funding tx confirmed in block: $txid")
+                return
+            }
+            log("waiting for funding tx to be included in a block...")
+            mine(1)
+            Thread.sleep(1_000L)
+        }
+        error("funding tx was not confirmed before timeout: txid=$txid")
     }
 
     private fun waitForUsableChannel(nodeA: SdkNode, nodeB: SdkNode, assetId: ContractId, timeoutSec: Long) {
@@ -353,32 +372,29 @@ class MultiOpenCloseTest {
         val nodeA = makeNode("multi_open_close/node_a", nodeADaemonPort, nodeAPeerPort)
         var nodeB: SdkNode? = null
         var nodeC: SdkNode? = null
-        var step = "start"
         try {
-            step = "initA"; initNode(nodeA, "nodeApass", "node A")
-            step = "unlockA"; unlockNode(nodeA, "nodeApass", "node A")
+            initNode(nodeA, "nodeApass", "node A")
+            unlockNode(nodeA, "nodeApass", "node A")
 
-            step = "makeB"; nodeB = makeNode("multi_open_close/node_b", nodeBDaemonPort, nodeBPeerPort)
-            step = "initB"; initNode(nodeB, "nodeBpass", "node B")
-            step = "unlockB"; unlockNode(nodeB, "nodeBpass", "node B")
+            nodeB = makeNode("multi_open_close/node_b", nodeBDaemonPort, nodeBPeerPort)
+            initNode(nodeB, "nodeBpass", "node B")
+            unlockNode(nodeB, "nodeBpass", "node B")
 
-            step = "makeC"; nodeC = makeNode("multi_open_close/node_c", nodeCDaemonPort, nodeCPeerPort)
-            step = "initC"; initNode(nodeC, "nodeCpass", "node C")
-            step = "unlockC"; unlockNode(nodeC, "nodeCpass", "node C")
+            nodeC = makeNode("multi_open_close/node_c", nodeCDaemonPort, nodeCPeerPort)
+            initNode(nodeC, "nodeCpass", "node C")
+            unlockNode(nodeC, "nodeCpass", "node C")
 
             val nodeBReady = requireNotNull(nodeB)
             val nodeCReady = requireNotNull(nodeC)
 
-            step = "fundA"; fundAndCreateUtxos(nodeA, "node A")
-            step = "fundB"; fundAndCreateUtxos(nodeBReady, "node B")
-            step = "fundC"; fundAndCreateUtxos(nodeCReady, "node C")
+            fundAndCreateUtxos(nodeA, "node A")
+            fundAndCreateUtxos(nodeBReady, "node B")
+            fundAndCreateUtxos(nodeCReady, "node C")
 
-            step = "issueNia"
             val assetId = issueAssetNia(nodeA, "node A")
             mine(1)
             nodeA.sync()
 
-            step = "nodeInfo"
             val nodeBPubkey = nodeBReady.nodeInfo().pubkey
             val peerUri = "$nodeBPubkey@127.0.0.1:${nodeBPeerPort.toInt()}"
             try {
@@ -388,7 +404,6 @@ class MultiOpenCloseTest {
                 log("connectpeer: already connected")
             }
 
-            step = "openPartial1"
             val firstOpen = nodeA.openchannel(
                 SdkOpenChannelRequest(
                     peerPubkeyAndOptAddr = peerUri,
@@ -402,25 +417,24 @@ class MultiOpenCloseTest {
                     assetId = assetId,
                     assetAmount = 600u,
                     pushAssetAmount = null,
+                    virtualOpenMode = null,
                 )
             )
-            waitForChannelFundingTx(nodeA, nodeBReady, assetId, 120L)
+            var fundingTxid = waitForChannelFundingTx(nodeA, nodeBReady, assetId, 120L)
+            log("Mining blocks one by one until funding tx is confirmed...")
+            mineUntilTxConfirmed(nodeA, fundingTxid)
             mine(openChannelConfirmBlocks)
             waitForUsableChannel(nodeA, nodeBReady, assetId, channelReadyTimeoutSec)
 
-            step = "checkBalanceAfterOpen1"
             assertEquals(400uL, assetBalanceSpendable(nodeA, assetId))
 
-            step = "keysend1"
             keysend(nodeA, nodeBPubkey, null, assetId, 100u)
 
-            step = "close1"
             val firstChannelId = nodeA.getChannelId(firstOpen.temporaryChannelId)
             closeChannel(nodeA, firstChannelId, nodeBPubkey)
             waitForBalance(nodeA, assetId, 900uL, 70L)
             waitForBalance(nodeBReady, assetId, 100uL, 70L)
 
-            step = "openPartial2"
             val secondOpen = nodeA.openchannel(
                 SdkOpenChannelRequest(
                     peerPubkeyAndOptAddr = peerUri,
@@ -434,25 +448,24 @@ class MultiOpenCloseTest {
                     assetId = assetId,
                     assetAmount = 500u,
                     pushAssetAmount = null,
+                    virtualOpenMode = null,
                 )
             )
-            waitForChannelFundingTx(nodeA, nodeBReady, assetId, 120L)
+            fundingTxid = waitForChannelFundingTx(nodeA, nodeBReady, assetId, 120L)
+            log("Mining blocks one by one until funding tx is confirmed...")
+            mineUntilTxConfirmed(nodeA, fundingTxid)
             mine(openChannelConfirmBlocks)
             waitForUsableChannel(nodeA, nodeBReady, assetId, channelReadyTimeoutSec)
 
-            step = "checkBalanceAfterOpen2"
             assertEquals(400uL, assetBalanceSpendable(nodeA, assetId))
 
-            step = "keysend2"
             keysend(nodeA, nodeBPubkey, null, assetId, 100u)
 
-            step = "close2"
             val secondChannelId = nodeA.getChannelId(secondOpen.temporaryChannelId)
             closeChannel(nodeA, secondChannelId, nodeBPubkey)
             waitForBalance(nodeA, assetId, 800uL, 70L)
             waitForBalance(nodeBReady, assetId, 200uL, 70L)
 
-            step = "sendRgbAtoC"
             val recipientIdA = rgbInvoice(nodeCReady)
             sendRgb(nodeA, assetId, recipientIdA, 700u)
             mine(1)
@@ -460,7 +473,6 @@ class MultiOpenCloseTest {
             refreshTransfers(nodeCReady)
             refreshTransfers(nodeA)
 
-            step = "sendRgbBtoC"
             val recipientIdB = rgbInvoice(nodeCReady)
             sendRgb(nodeBReady, assetId, recipientIdB, 150u)
             mine(1)
@@ -468,14 +480,11 @@ class MultiOpenCloseTest {
             refreshTransfers(nodeCReady)
             refreshTransfers(nodeBReady)
 
-            step = "finalBalances"
             assertEquals(100uL, assetBalanceSpendable(nodeA, assetId))
             assertEquals(50uL, assetBalanceSpendable(nodeBReady, assetId))
             assertEquals(850uL, assetBalanceSpendable(nodeCReady, assetId))
 
             log("SUCCESS: Android multi_open_close completed")
-        } catch (e: Exception) {
-            throw RuntimeException("FAILED at step=$step: ${e.message}", e)
         } finally {
             safeShutdown(nodeA)
             safeShutdown(nodeB)

@@ -100,6 +100,7 @@ fn success() {
                 asset_id: Some(asset_id.clone()),
                 asset_amount: Some(OPEN_CHANNEL_ASSET_AMOUNT),
                 push_asset_amount: None,
+                virtual_open_mode: None,
             })
             .expect("node A openchannel");
 

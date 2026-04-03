@@ -130,6 +130,8 @@ class SwapRoundtripBuyTest {
                 ldkPeerListeningPort = peerPort,
                 network = "regtest",
                 maxMediaUploadSizeMb = 20u,
+                enableVirtualChannelsV0 = false,
+                virtualPeerPubkeys = null,
             )
         )
     }
@@ -260,13 +262,41 @@ class SwapRoundtripBuyTest {
         )
     }
 
-    private fun waitForChannelReady(node: SdkNode, channelId: String, timeoutSec: Long) {
+    private fun waitForChannelFundingTx(
+        nodeA: SdkNode,
+        nodeB: SdkNode,
+        matcher: (org.utexo.rgblightningnode.Channel) -> Boolean,
+        timeoutSec: Long,
+    ): Pair<String, String> {
+        val deadline = System.currentTimeMillis() + timeoutSec * 1_000L
+        while (System.currentTimeMillis() < deadline) {
+            nodeA.sync()
+            nodeB.sync()
+            val opening = nodeA.listChannels().firstOrNull { matcher(it) && it.fundingTxid != null }
+            if (opening != null) {
+                val fundingTxid = requireNotNull(opening.fundingTxid)
+                log("channel funding tx found: $fundingTxid")
+                return opening.channelId to fundingTxid
+            }
+            log("waiting for channel funding tx...")
+            Thread.sleep(1_000L)
+        }
+        error("cannot find funding tx after ${timeoutSec}s")
+    }
+
+    private fun waitForChannelReady(
+        nodeA: SdkNode,
+        nodeB: SdkNode,
+        channelId: String,
+        timeoutSec: Long,
+    ) {
         val deadline = System.currentTimeMillis() + timeoutSec * 1_000L
         var polls = 0
         while (System.currentTimeMillis() < deadline) {
             polls++
-            node.sync()
-            val channel = node.listChannels().firstOrNull { it.channelId == channelId }
+            nodeA.sync()
+            nodeB.sync()
+            val channel = nodeA.listChannels().firstOrNull { it.channelId == channelId }
             if (channel?.ready == true) {
                 log("channel is ready")
                 return
@@ -281,34 +311,58 @@ class SwapRoundtripBuyTest {
                         "shortChannelId=${channel.shortChannelId}"
                 )
             }
+            if (polls % 5 == 0) {
+                log("mining 1 block...")
+                mine(1)
+            }
             Thread.sleep(1_000L)
         }
         error("channel did not become ready after ${timeoutSec}s: channelId=$channelId")
     }
 
-    private fun waitForChannelOpen(
-        node: SdkNode,
-        matcher: (org.utexo.rgblightningnode.Channel) -> Boolean,
-        timeoutSec: Long,
-    ): String {
+    private fun mineUntilTxConfirmed(node: SdkNode, txid: String, timeoutSec: Long = 180L) {
         val deadline = System.currentTimeMillis() + timeoutSec * 1_000L
         while (System.currentTimeMillis() < deadline) {
             node.sync()
-            val channel = node.listChannels().firstOrNull { matcher(it) && !it.ready }
-            val fundingTxid = channel?.fundingTxid
-            if (fundingTxid != null) {
-                val txOut = getTxOut(fundingTxid)
-                if (txOut.isNotBlank()) {
-                    log("channel funding tx found")
-                    mine(6)
-                    waitForChannelReady(node, channel.channelId, channelReadyTimeoutSec)
-                    return channel.channelId
-                }
+            val tx = node.listTransactions(false).firstOrNull { it.txid == txid }
+            if (tx != null && tx.confirmationTime != null) {
+                log("funding tx confirmed in block: $txid")
+                return
             }
-            log("waiting for channel funding tx...")
+            log("waiting for funding tx to be included in a block...")
+            mine(1)
             Thread.sleep(1_000L)
         }
-        error("cannot find funding tx after ${timeoutSec}s")
+        error("funding tx was not confirmed before timeout: txid=$txid")
+    }
+
+    private fun waitForChannelOpen(
+        node: SdkNode,
+        peerNode: SdkNode,
+        matcher: (org.utexo.rgblightningnode.Channel) -> Boolean,
+        waitForNodeConfirmedFunding: Boolean,
+        timeoutSec: Long,
+    ): String {
+        val (channelId, fundingTxid) = waitForChannelFundingTx(node, peerNode, matcher, timeoutSec)
+        log("Mining blocks one by one until funding tx is confirmed...")
+        if (waitForNodeConfirmedFunding) {
+            mineUntilTxConfirmed(node, fundingTxid, 180L)
+        } else {
+            val deadline = System.currentTimeMillis() + 180_000L
+            while (System.currentTimeMillis() < deadline) {
+                val txOut = getTxOut(fundingTxid)
+                if (txOut.isNotBlank()) {
+                    log("funding tx confirmed in block: $fundingTxid")
+                    break
+                }
+                log("waiting for funding tx to be included in a block...")
+                mine(1)
+                Thread.sleep(1_000L)
+            }
+        }
+        mine(6)
+        waitForChannelReady(node, peerNode, channelId, channelReadyTimeoutSec)
+        return channelId
     }
 
     private fun waitForUsableChannels(node: SdkNode, expectedCount: Int, timeoutSec: Long) {
@@ -432,30 +486,26 @@ class SwapRoundtripBuyTest {
         var nodeA: SdkNode? = makeNode("swap_roundtrip_buy/node_a", nodeADaemonPort, nodeAPeerPort)
         var nodeB: SdkNode? = makeNode("swap_roundtrip_buy/node_b", nodeBDaemonPort, nodeBPeerPort)
         val nodeC: SdkNode = makeNode("swap_roundtrip_buy/node_c", nodeCDaemonPort, nodeCPeerPort)
-        var step = "start"
 
         try {
-            step = "initA"; initNode(requireNotNull(nodeA), "nodeApass", "node A")
-            step = "initB"; initNode(requireNotNull(nodeB), "nodeBpass", "node B")
-            step = "initC"; initNode(nodeC, "nodeCpass", "node C")
-            step = "unlockA"; unlockNode(requireNotNull(nodeA), "nodeApass", "node A")
-            step = "unlockB"; unlockNode(requireNotNull(nodeB), "nodeBpass", "node B")
-            step = "unlockC"; unlockNode(nodeC, "nodeCpass", "node C")
+            initNode(requireNotNull(nodeA), "nodeApass", "node A")
+            initNode(requireNotNull(nodeB), "nodeBpass", "node B")
+            initNode(nodeC, "nodeCpass", "node C")
+            unlockNode(requireNotNull(nodeA), "nodeApass", "node A")
+            unlockNode(requireNotNull(nodeB), "nodeBpass", "node B")
+            unlockNode(nodeC, "nodeCpass", "node C")
 
-            step = "fundA"; fundAndCreateUtxos(requireNotNull(nodeA), "node A")
-            step = "fundB"; fundAndCreateUtxos(requireNotNull(nodeB), "node B")
-            step = "fundC"; fundAndCreateUtxos(nodeC, "node C")
+            fundAndCreateUtxos(requireNotNull(nodeA), "node A")
+            fundAndCreateUtxos(requireNotNull(nodeB), "node B")
+            fundAndCreateUtxos(nodeC, "node C")
 
-            step = "issueNia"
             val assetId = issueAssetNia(requireNotNull(nodeA), "node A")
 
-            step = "nodeInfo"
             val infoA = requireNotNull(nodeA).nodeInfo()
             val infoB = requireNotNull(nodeB).nodeInfo()
             val peerUriAB = "${infoB.pubkey}@127.0.0.1:${nodeBPeerPort.toInt()}"
             val peerUriBA = "${infoA.pubkey}@127.0.0.1:${nodeAPeerPort.toInt()}"
 
-            step = "openChannel12"
             requireNotNull(nodeA).openchannel(
                 SdkOpenChannelRequest(
                     peerPubkeyAndOptAddr = peerUriAB,
@@ -469,20 +519,22 @@ class SwapRoundtripBuyTest {
                     assetId = assetId,
                     assetAmount = 600u,
                     pushAssetAmount = null,
+                    virtualOpenMode = null,
                 )
             )
             val channel12Id = waitForChannelOpen(
                 requireNotNull(nodeA),
+                requireNotNull(nodeB),
                 {
                     it.peerPubkey == infoB.pubkey &&
                         it.assetId == assetId &&
                         it.assetLocalAmount == 600uL &&
                         it.assetRemoteAmount == 0uL
                 },
+                true,
                 120L,
             )
 
-            step = "openChannel21"
             requireNotNull(nodeB).openchannel(
                 SdkOpenChannelRequest(
                     peerPubkeyAndOptAddr = peerUriBA,
@@ -496,20 +548,22 @@ class SwapRoundtripBuyTest {
                     assetId = null,
                     assetAmount = null,
                     pushAssetAmount = null,
+                    virtualOpenMode = null,
                 )
             )
             val channel21Id = waitForChannelOpen(
                 requireNotNull(nodeB),
+                requireNotNull(nodeA),
                 {
                     it.peerPubkey == infoA.pubkey &&
                         it.assetId == null &&
                         it.assetLocalAmount == null &&
                         it.assetRemoteAmount == null
                 },
+                false,
                 120L,
             )
 
-            step = "channelsBefore"
             val channelsABefore = requireNotNull(nodeA).listChannels()
             val channelsBBefore = requireNotNull(nodeB).listChannels()
             val chanA12Before = channelsABefore.first { it.channelId == channel12Id }
@@ -517,7 +571,6 @@ class SwapRoundtripBuyTest {
             val chanB12Before = channelsBBefore.first { it.channelId == channel12Id }
             val chanB21Before = channelsBBefore.first { it.channelId == channel21Id }
 
-            step = "makerInit"
             val makerInit = requireNotNull(nodeA).`makerinit`(
                 SdkMakerInitRequest(
                     qtyFrom = qtyFrom,
@@ -527,10 +580,8 @@ class SwapRoundtripBuyTest {
                     timeoutSec = 3600u,
                 )
             )
-            step = "taker"
             requireNotNull(nodeB).taker(SdkTakerRequest(swapstring = makerInit.swapstring))
 
-            step = "swapsWaiting"
             val makerWaitingLists = requireNotNull(nodeA).`listSwaps`()
             assertTrue(makerWaitingLists.taker.isEmpty())
             assertEquals(1, makerWaitingLists.maker.size)
@@ -552,7 +603,6 @@ class SwapRoundtripBuyTest {
             assertEquals(makerInit.paymentHash, takerWaiting.paymentHash)
             assertEquals(SwapStatus.WAITING, takerWaiting.status)
 
-            step = "makerExecute"
             requireNotNull(nodeA).`makerexecute`(
                 SdkMakerExecuteRequest(
                     swapstring = makerInit.swapstring,
@@ -561,18 +611,15 @@ class SwapRoundtripBuyTest {
                 )
             )
 
-            step = "swapPending"
             val makerPendingLists = requireNotNull(nodeA).`listSwaps`()
             assertEquals(1, makerPendingLists.maker.size)
             val makerPending = makerPendingLists.maker.first()
             assertEquals(SwapStatus.PENDING, makerPending.status)
             waitForSwapStatus(requireNotNull(nodeB), makerInit.paymentHash, SwapStatus.SUCCEEDED, 70L)
 
-            step = "lnBalancesAfterSwap"
             waitForLnBalance(requireNotNull(nodeA), assetId, 590uL, 60L)
             waitForLnBalance(requireNotNull(nodeB), assetId, 10uL, 60L)
 
-            step = "restartAB"
             safeShutdown(nodeA); safeShutdown(nodeB)
             pauseAfterShutdown()
             nodeA = makeNode("swap_roundtrip_buy/node_a", nodeADaemonPort, nodeAPeerPort)
@@ -582,11 +629,9 @@ class SwapRoundtripBuyTest {
             waitForUsableChannels(requireNotNull(nodeA), 2, 60L)
             waitForUsableChannels(requireNotNull(nodeB), 2, 60L)
 
-            step = "offchainBalancesAfterRestart"
             waitForAssetOffchainBalances(requireNotNull(nodeA), assetId, 590uL, 10uL, 60L)
             waitForAssetOffchainBalances(requireNotNull(nodeB), assetId, 10uL, 590uL, 60L)
 
-            step = "swapsSucceededAfterRestart"
             val makerSucceededLists = requireNotNull(nodeA).`listSwaps`()
             assertEquals(1, makerSucceededLists.maker.size)
             val makerSucceeded = makerSucceededLists.maker.first()
@@ -598,7 +643,6 @@ class SwapRoundtripBuyTest {
             assertTrue(requireNotNull(nodeA).listPayments().isEmpty())
             assertTrue(requireNotNull(nodeB).listPayments().isEmpty())
 
-            step = "channelsAfterRestart"
             val channelsA = requireNotNull(nodeA).listChannels()
             val channelsB = requireNotNull(nodeB).listChannels()
             val chanA12 = channelsA.first { it.channelId == channel12Id }
@@ -610,15 +654,12 @@ class SwapRoundtripBuyTest {
             assertEquals(chanB12Before.localBalanceSat + htlcMinSat, chanB12.localBalanceSat)
             assertEquals(chanB21Before.localBalanceSat - btcLegDiffSat, chanB21.localBalanceSat)
 
-            step = "closeChannel12"
             closeChannel(requireNotNull(nodeA), channel12Id, infoB.pubkey)
             waitForBalance(requireNotNull(nodeA), assetId, 990uL, 70L)
             waitForBalance(requireNotNull(nodeB), assetId, 10uL, 70L)
 
-            step = "closeChannel21"
             closeChannel(requireNotNull(nodeB), channel21Id, infoA.pubkey)
 
-            step = "sendRgbAtoC"
             val recipientIdA = rgbInvoice(nodeC)
             sendRgb(requireNotNull(nodeA), assetId, recipientIdA, 200u)
             mine(1)
@@ -626,7 +667,6 @@ class SwapRoundtripBuyTest {
             refreshTransfers(nodeC)
             refreshTransfers(requireNotNull(nodeA))
 
-            step = "sendRgbBtoC"
             val recipientIdB = rgbInvoice(nodeC)
             sendRgb(requireNotNull(nodeB), assetId, recipientIdB, 5u)
             mine(1)
@@ -634,14 +674,11 @@ class SwapRoundtripBuyTest {
             refreshTransfers(nodeC)
             refreshTransfers(requireNotNull(nodeB))
 
-            step = "finalBalances"
             assertEquals(790uL, assetBalanceSpendable(requireNotNull(nodeA), assetId))
             assertEquals(5uL, assetBalanceSpendable(requireNotNull(nodeB), assetId))
             assertEquals(205uL, assetBalanceSpendable(nodeC, assetId))
 
             log("SUCCESS: Android swap_roundtrip_buy completed")
-        } catch (e: Exception) {
-            throw RuntimeException("FAILED at step=$step: ${e.message}", e)
         } finally {
             safeShutdown(nodeA)
             safeShutdown(nodeB)

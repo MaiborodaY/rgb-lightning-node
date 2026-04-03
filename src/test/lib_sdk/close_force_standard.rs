@@ -74,6 +74,7 @@ fn close_force_standard() {
                 asset_id: Some(asset_id.clone()),
                 asset_amount: Some(600),
                 push_asset_amount: None,
+                virtual_open_mode: None,
             })
             .expect("node A openchannel");
 

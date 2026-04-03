@@ -78,6 +78,7 @@ fn openchannel_push_asset_amount() {
                 asset_id: Some(asset_id.clone()),
                 asset_amount: Some(600),
                 push_asset_amount: Some(250),
+                virtual_open_mode: None,
             })
             .expect("node A openchannel partial push");
 
@@ -165,6 +166,7 @@ fn openchannel_push_asset_amount() {
                 asset_id: Some(asset_id.clone()),
                 asset_amount: Some(600),
                 push_asset_amount: Some(600),
+                virtual_open_mode: None,
             })
             .expect("node A openchannel full push");
 

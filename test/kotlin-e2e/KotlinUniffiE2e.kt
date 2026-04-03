@@ -20,6 +20,7 @@ import org.utexo.rgblightningnode.SdkRgbInvoiceRequest
 import org.utexo.rgblightningnode.SdkSendPaymentRequest
 import org.utexo.rgblightningnode.SdkUnlockRequest
 import org.utexo.rgblightningnode.SendRgbRequest
+import org.utexo.rgblightningnode.Txid
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -96,6 +97,8 @@ private fun makeNode(storageDir: Path, daemonPort: UShort, peerPort: UShort): Sd
             ldkPeerListeningPort = peerPort,
             network = "regtest",
             maxMediaUploadSizeMb = 20u,
+            enableVirtualChannelsV0 = false,
+            virtualPeerPubkeys = null,
         )
     )
 }
@@ -125,12 +128,18 @@ private fun initIfNeeded(node: SdkNode, password: String, name: String) {
 }
 
 private fun unlockIfNeeded(node: SdkNode, password: String, name: String) {
+    var unlockState = "unlocked"
     try {
         node.unlock(unlockRequest(password))
-        println("$name: unlocked")
     } catch (_: RlnException.Conflict) {
-        println("$name: already unlocked")
+        unlockState = "already unlocked"
     }
+    try {
+        node.nodeInfo()
+    } catch (_: RlnException.NotInitialized) {
+        error("$name: unlock did not leave node usable (state=$unlockState)")
+    }
+    println("$name: $unlockState")
 }
 
 private fun createUtxos(node: SdkNode, name: String) {
@@ -219,7 +228,7 @@ private fun waitForChannelFundingTx(
     nodeB: SdkNode,
     assetId: ContractId?,
     timeoutSec: Long,
-) {
+): Txid {
     val deadline = System.currentTimeMillis() + timeoutSec * 1000L
     var lastSummary = "no channels"
     while (System.currentTimeMillis() < deadline) {
@@ -232,12 +241,46 @@ private fun waitForChannelFundingTx(
             channelMatchesAsset(it.assetId, assetId) && it.fundingTxid != null
         }
         if (opening != null) {
-            return
+            println("channel funding tx found: ${opening.fundingTxid}")
+            return requireNotNull(opening.fundingTxid)
         }
         println("waiting for channel funding tx broadcast...")
         Thread.sleep(1000L)
     }
     error("No funding tx after ${timeoutSec}s for assetId=$assetId; last_channels=$lastSummary")
+}
+
+private fun mineUntilTxConfirmed(
+    node: SdkNode,
+    txid: Txid,
+    timeoutSec: Long = 180L,
+) {
+    val deadline = System.currentTimeMillis() + timeoutSec * 1000L
+    while (System.currentTimeMillis() < deadline) {
+        node.sync()
+        val tx = node.listTransactions(false).firstOrNull { it.txid == txid }
+        if (tx != null && tx.confirmationTime != null) {
+            println("funding tx confirmed in block: $txid")
+            return
+        }
+        println("waiting for funding tx to be included in a block...")
+        runRegtest("mine", "1")
+        Thread.sleep(1000L)
+    }
+    error("funding tx was not confirmed before timeout: txid=$txid")
+}
+
+private fun confirmChannelFunding(
+    node: SdkNode,
+    assetId: ContractId?,
+    fundingTxid: Txid,
+) {
+    if (assetId != null) {
+        println("Mining blocks one by one until funding tx is confirmed...")
+        mineUntilTxConfirmed(node, fundingTxid, 180L)
+    }
+    println("Mining $OPEN_CHANNEL_CONFIRM_BLOCKS blocks for channel confirmations...")
+    runRegtest("mine", OPEN_CHANNEL_CONFIRM_BLOCKS.toString())
 }
 
 private fun waitForUsableChannel(
@@ -513,13 +556,13 @@ private fun paymentScenario() {
                 assetId = assetId,
                 assetAmount = OPEN_CHANNEL_ASSET_AMOUNT,
                 pushAssetAmount = null,
+                virtualOpenMode = null,
             )
         )
         println("openchannel temporary_channel_id: ${openResponse.temporaryChannelId}")
 
-        waitForChannelFundingTx(nodeA, nodeB, assetId, timeoutSec = 120L)
-        println("Mining $OPEN_CHANNEL_CONFIRM_BLOCKS blocks for channel confirmations...")
-        runRegtest("mine", OPEN_CHANNEL_CONFIRM_BLOCKS.toString())
+        val fundingTxid = waitForChannelFundingTx(nodeA, nodeB, assetId, timeoutSec = 120L)
+        confirmChannelFunding(nodeA, assetId, fundingTxid)
         waitForUsableChannel(nodeA, nodeB, assetId, CHANNEL_READY_TIMEOUT_SEC, 5)
         println("Channel is usable")
 
@@ -634,11 +677,12 @@ private fun openchannelPushAssetAmountScenario() {
                 assetId = assetId,
                 assetAmount = 600u,
                 pushAssetAmount = 250u,
+                virtualOpenMode = null,
             )
         )
 
-        waitForChannelFundingTx(nodeA, nodeB, assetId, 120L)
-        runRegtest("mine", OPEN_CHANNEL_CONFIRM_BLOCKS.toString())
+        var fundingTxid = waitForChannelFundingTx(nodeA, nodeB, assetId, 120L)
+        confirmChannelFunding(nodeA, assetId, fundingTxid)
         waitForUsableChannel(nodeA, nodeB, assetId, 300L)
 
         val partialChannelId = nodeA.getChannelId(partialPushChannel.temporaryChannelId)
@@ -673,11 +717,12 @@ private fun openchannelPushAssetAmountScenario() {
                 assetId = assetId,
                 assetAmount = 600u,
                 pushAssetAmount = 600u,
+                virtualOpenMode = null,
             )
         )
 
-        waitForChannelFundingTx(nodeA, nodeB, assetId, 120L)
-        runRegtest("mine", OPEN_CHANNEL_CONFIRM_BLOCKS.toString())
+        fundingTxid = waitForChannelFundingTx(nodeA, nodeB, assetId, 120L)
+        confirmChannelFunding(nodeA, assetId, fundingTxid)
         waitForUsableChannel(nodeA, nodeB, assetId, 300L)
 
         // This scenario intentionally restarts node A and node B mid-run on the same storage dirs.
@@ -838,12 +883,12 @@ private fun closeCoopVanillaScenario(name: String, portOffset: UInt, withAnchors
                 assetId = null,
                 assetAmount = null,
                 pushAssetAmount = null,
+                virtualOpenMode = null,
             )
         )
 
-        waitForChannelFundingTx(nodeA, nodeB, null, 120L)
-        println("Mining $OPEN_CHANNEL_CONFIRM_BLOCKS blocks for channel confirmations...")
-        runRegtest("mine", OPEN_CHANNEL_CONFIRM_BLOCKS.toString())
+        val fundingTxid = waitForChannelFundingTx(nodeA, nodeB, null, 120L)
+        confirmChannelFunding(nodeA, null, fundingTxid)
         waitForUsableChannel(nodeA, nodeB, null, 120L, mineEveryPolls = 5)
         val channelId = nodeA.getChannelId(openChannel.temporaryChannelId)
 
@@ -905,6 +950,7 @@ private fun expectOpenchannelWithoutAddrFails(
                 assetId = assetId,
                 assetAmount = 600u,
                 pushAssetAmount = null,
+                virtualOpenMode = null,
             )
         )
         error("openchannel without addr should fail when peer is not connected")
@@ -978,10 +1024,11 @@ private fun openchannelOptionalAddrScenario(
                     assetId = assetId,
                     assetAmount = 600u,
                     pushAssetAmount = null,
+                    virtualOpenMode = null,
                 )
             )
-            waitForChannelFundingTx(nodeA, nodeB, assetId, 120L)
-            runRegtest("mine", OPEN_CHANNEL_CONFIRM_BLOCKS.toString())
+            val fundingTxid = waitForChannelFundingTx(nodeA, nodeB, assetId, 120L)
+            confirmChannelFunding(nodeA, assetId, fundingTxid)
             waitForUsableChannel(nodeA, nodeB, assetId, 120L, 5)
             check(assetBalanceSpendable(nodeA, assetId) == 400uL)
             check(nodeA.listChannels().size == 1)
@@ -1011,10 +1058,11 @@ private fun openchannelOptionalAddrScenario(
                     assetId = assetId,
                     assetAmount = 600u,
                     pushAssetAmount = null,
+                    virtualOpenMode = null,
                 )
             )
-            waitForChannelFundingTx(nodeB, nodeA, assetId, 120L)
-            runRegtest("mine", OPEN_CHANNEL_CONFIRM_BLOCKS.toString())
+            val fundingTxid = waitForChannelFundingTx(nodeB, nodeA, assetId, 120L)
+            confirmChannelFunding(nodeB, assetId, fundingTxid)
             waitForUsableChannel(nodeB, nodeA, assetId, 120L, 5)
             check(assetBalanceSpendable(nodeB, assetId) == 400uL)
             check(nodeA.listChannels().size == 1)

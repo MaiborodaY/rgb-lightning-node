@@ -158,6 +158,7 @@ fn run_close_coop_vanilla(name: &str, port_offset: u16, with_anchors: bool) {
                 asset_id: None,
                 asset_amount: None,
                 push_asset_amount: None,
+                virtual_open_mode: None,
             })
             .expect("node A openchannel vanilla");
         let channel_id = wait_for_vanilla_channel(

@@ -111,6 +111,7 @@ fn restart() {
                 asset_id: Some(asset_id.clone()),
                 asset_amount: Some(600),
                 push_asset_amount: None,
+                virtual_open_mode: None,
             })
             .expect("node A openchannel");
         wait_for_channel_funding_tx(&node_a, &node_b, &asset_id, Duration::from_secs(120));
@@ -307,6 +308,10 @@ fn restart() {
         node_c.shutdown();
     }));
 
+    // The closure above repeatedly creates fresh SDK handles on the same storage dirs and shuts
+    // those active instances down in-place at each restart boundary. These outer handles are the
+    // original pre-restart ones, so this final cleanup is intentionally best-effort and may end up
+    // calling shutdown on handles that were already stopped earlier.
     node_a.shutdown();
     node_b.shutdown();
     node_c.shutdown();

@@ -39,12 +39,11 @@ The Android test connects to local regtest services through `10.0.2.2`:
 - electrs: `10.0.2.2:50001`
 - proxy: `10.0.2.2:3000`
 
-Current Android e2e baseline uses the emulator `x86_64` ABI only. Multi-ABI
-Android artifact coverage remains a separate rollout step.
+Current Android CI uses the emulator `x86_64` ABI only.
 
 ## Run
 
-Recommended entry point:
+Run via script:
 
 ```sh
 cd /path/to/rgb-lightning-node
@@ -72,6 +71,27 @@ Before running Gradle directly, first prepare Android artifacts:
 cd android-e2e
 ./gradlew connectedDebugAndroidTest
 ```
+
+## CI Usage
+
+GitHub Actions runs Android e2e in two phases:
+
+1. build Android UniFFI artifacts once:
+```sh
+./scripts/ci/uniffi_generate_kotlin_android.sh
+./scripts/ci/build_android_jni_x86_64.sh
+```
+2. run instrumented tests as a matrix on an `x86_64` Android emulator:
+```sh
+./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=<test_class>
+```
+
+Current CI test classes:
+- `org.rgblightningnode.PaymentTest`
+- `org.rgblightningnode.RestartTest`
+- `org.rgblightningnode.MultiOpenCloseTest`
+- `org.rgblightningnode.SwapRoundtripBuyTest`
+- `org.rgblightningnode.ConcurrentBtcPaymentsTest`
 
 ## Cleanup
 

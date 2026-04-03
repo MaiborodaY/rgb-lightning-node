@@ -23,9 +23,12 @@ final class SwiftUniffiE2ESmokeTests: XCTestCase {
                 daemonListeningPort: randomPort(),
                 ldkPeerListeningPort: randomPort(),
                 network: "regtest",
-                maxMediaUploadSizeMb: 5
+                maxMediaUploadSizeMb: 5,
+                enableVirtualChannelsV0: false,
+                virtualPeerPubkeys: nil
             )
         )
+        defer { node.shutdown() }
 
         try node.unlock(
             request: SdkUnlockRequest(

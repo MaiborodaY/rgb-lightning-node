@@ -87,7 +87,7 @@ What the script does:
 
 Recommended job shape:
 
-1. use a macOS runner
+1. use a self-hosted macOS runner with Docker available
 2. export the regtest/indexer/proxy env vars
 3. run:
 
@@ -98,6 +98,9 @@ Recommended job shape:
 Suggested responsibility split:
 - this harness should validate the Swift consumer API wiring
 - heavier Swift parity/e2e scenarios can be added later after this smoke path is stable
+
+Current repository CI uses this as a self-hosted macOS smoke path, not a
+GitHub-hosted `macos-latest` job.
 
 ## Notes
 

@@ -10,7 +10,29 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.runner.RunWith
-import org.utexo.rgblightningnode.*
+import org.utexo.rgblightningnode.AssetRecipients
+import org.utexo.rgblightningnode.AssignmentKind
+import org.utexo.rgblightningnode.ContractId
+import org.utexo.rgblightningnode.HtlcStatus
+import org.utexo.rgblightningnode.InvoiceStatus
+import org.utexo.rgblightningnode.LnInvoiceRequest
+import org.utexo.rgblightningnode.Payment
+import org.utexo.rgblightningnode.PaymentHash
+import org.utexo.rgblightningnode.RgbRecipient
+import org.utexo.rgblightningnode.RlnException
+import org.utexo.rgblightningnode.SdkCloseChannelRequest
+import org.utexo.rgblightningnode.SdkCreateUtxosRequest
+import org.utexo.rgblightningnode.SdkInitRequest
+import org.utexo.rgblightningnode.SdkIssueAssetNiaRequest
+import org.utexo.rgblightningnode.SdkNode
+import org.utexo.rgblightningnode.SdkOpenChannelRequest
+import org.utexo.rgblightningnode.SdkRefreshTransfersRequest
+import org.utexo.rgblightningnode.SdkRgbInvoiceRequest
+import org.utexo.rgblightningnode.SdkSendPaymentRequest
+import org.utexo.rgblightningnode.SdkUnlockRequest
+import org.utexo.rgblightningnode.SendRgbRequest
+import org.utexo.rgblightningnode.TransactionType
+import org.utexo.rgblightningnode.Txid
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -43,7 +65,7 @@ class PaymentTest {
     private val utxosFeeRate: ULong = 7u
     private val assetSupply: ULong = 1000u
     private val channelAssetAmount: ULong = 600u
-    private val channelReadyTimeoutSec: Long = 300L
+    private val channelReadyTimeoutSec: Long = 60L
 
     // ── Bitcoin RPC ──────────────────────────────────────────────────────────
 
@@ -90,6 +112,8 @@ class PaymentTest {
                 ldkPeerListeningPort = peerPort,
                 network = "regtest",
                 maxMediaUploadSizeMb = 20u,
+                enableVirtualChannelsV0 = false,
+                virtualPeerPubkeys = null,
             )
         )
     }
@@ -180,16 +204,35 @@ class PaymentTest {
         error("spendable balance did not become expected=$expected actual=$lastBalance after ${timeoutSec}s")
     }
 
-    private fun waitForChannelFundingTx(nodeA: SdkNode, nodeB: SdkNode, assetId: ContractId, timeoutSec: Long) {
+    private fun waitForChannelFundingTx(nodeA: SdkNode, nodeB: SdkNode, assetId: ContractId, timeoutSec: Long): Txid {
         val deadline = System.currentTimeMillis() + timeoutSec * 1_000L
         while (System.currentTimeMillis() < deadline) {
             nodeA.sync(); nodeB.sync()
-            val found = nodeA.listChannels().any { it.assetId == assetId && it.fundingTxid != null }
-            if (found) { log("channel funding tx found"); return }
+            val opening = nodeA.listChannels().firstOrNull { it.assetId == assetId && it.fundingTxid != null }
+            if (opening != null) {
+                log("channel funding tx found: ${opening.fundingTxid}")
+                return requireNotNull(opening.fundingTxid)
+            }
             log("waiting for channel funding tx...")
             Thread.sleep(1_000L)
         }
         error("no channel funding tx after ${timeoutSec}s")
+    }
+
+    private fun mineUntilTxConfirmed(node: SdkNode, txid: Txid, timeoutSec: Long = 180L) {
+        val deadline = System.currentTimeMillis() + timeoutSec * 1_000L
+        while (System.currentTimeMillis() < deadline) {
+            node.sync()
+            val tx = node.listTransactions(false).firstOrNull { it.txid == txid }
+            if (tx != null && tx.confirmationTime != null) {
+                log("funding tx confirmed in block: $txid")
+                return
+            }
+            log("waiting for funding tx to be included in a block...")
+            mine(1)
+            Thread.sleep(1_000L)
+        }
+        error("funding tx was not confirmed before timeout: txid=$txid")
     }
 
     private fun waitForUsableChannel(nodeA: SdkNode, nodeB: SdkNode, assetId: ContractId, timeoutSec: Long) {
@@ -411,20 +454,19 @@ class PaymentTest {
         val nodeA = makeNode("payment/node_a", nodeADaemonPort, nodeAPeerPort)
         val nodeB = makeNode("payment/node_b", nodeBDaemonPort, nodeBPeerPort)
         val nodeC = makeNode("payment/node_c", nodeCDaemonPort, nodeCPeerPort)
-        var step = "start"
         try {
-            step = "initA";    initNode(nodeA, "nodeApass", "node A")
-            step = "initB";    initNode(nodeB, "nodeBpass", "node B")
-            step = "initC";    initNode(nodeC, "nodeCpass", "node C")
-            step = "unlockA";  unlockNode(nodeA, "nodeApass", "node A")
-            step = "unlockB";  unlockNode(nodeB, "nodeBpass", "node B")
-            step = "unlockC";  unlockNode(nodeC, "nodeCpass", "node C")
+            initNode(nodeA, "nodeApass", "node A")
+            initNode(nodeB, "nodeBpass", "node B")
+            initNode(nodeC, "nodeCpass", "node C")
+            unlockNode(nodeA, "nodeApass", "node A")
+            unlockNode(nodeB, "nodeBpass", "node B")
+            unlockNode(nodeC, "nodeCpass", "node C")
 
-            step = "fundA";    fundAndCreateUtxos(nodeA, "node A")
-            step = "fundB";    fundAndCreateUtxos(nodeB, "node B")
-            step = "fundC";    fundAndCreateUtxos(nodeC, "node C")
+            fundAndCreateUtxos(nodeA, "node A")
+            fundAndCreateUtxos(nodeB, "node B")
+            fundAndCreateUtxos(nodeC, "node C")
 
-            step = "issueNia"; val assetId = nodeA.issueassetnia(
+            val assetId = nodeA.issueassetnia(
                 SdkIssueAssetNiaRequest(
                     amounts = listOf(assetSupply),
                     ticker = "USDT",
@@ -434,12 +476,11 @@ class PaymentTest {
             ).assetId
             log("issued asset: $assetId")
 
-            step = "nodeInfo";  val infoA = nodeA.nodeInfo(); val infoB = nodeB.nodeInfo()
+            val infoA = nodeA.nodeInfo(); val infoB = nodeB.nodeInfo()
             log("node A pubkey: ${infoA.pubkey}")
             log("node B pubkey: ${infoB.pubkey}")
 
             val peerUri = "${infoB.pubkey}@127.0.0.1:${nodeBPeerPort.toInt()}"
-            step = "connectpeer"
             try {
                 nodeA.connectpeer(peerUri)
                 log("connectpeer: ok")
@@ -447,7 +488,6 @@ class PaymentTest {
                 log("connectpeer: already connected")
             }
 
-            step = "openchannel"
             val openResponse = nodeA.openchannel(
                 SdkOpenChannelRequest(
                     peerPubkeyAndOptAddr = peerUri,
@@ -461,16 +501,17 @@ class PaymentTest {
                     assetId = assetId,
                     assetAmount = channelAssetAmount,
                     pushAssetAmount = null,
+                    virtualOpenMode = null,
                 )
             )
             log("openchannel sent")
 
-            step = "waitFundingTx";  waitForChannelFundingTx(nodeA, nodeB, assetId, 120L)
-            step = "mine6";          mine(6)
-            step = "waitUsable";     waitForUsableChannel(nodeA, nodeB, assetId, channelReadyTimeoutSec)
-            step = "checkBalanceAfterOpen"; assertEquals(400uL, assetBalanceSpendable(nodeA, assetId))
+            val fundingTxid = waitForChannelFundingTx(nodeA, nodeB, assetId, 120L)
+            log("Mining blocks one by one until funding tx is confirmed..."); mineUntilTxConfirmed(nodeA, fundingTxid)
+            mine(6)
+            waitForUsableChannel(nodeA, nodeB, assetId, channelReadyTimeoutSec)
+            assertEquals(400uL, assetBalanceSpendable(nodeA, assetId))
 
-            step = "channelsBefore"
             val channels1Before = nodeA.listChannels()
             val channels2Before = nodeB.listChannels()
             assertEquals(1, channels1Before.size)
@@ -480,7 +521,6 @@ class PaymentTest {
             val channelId = nodeA.getChannelId(openResponse.temporaryChannelId)
             assertEquals(channelId, chan1Before.channelId)
 
-            step = "lnInvoice1"
             val invoice1 = nodeB.lnInvoice(
                 LnInvoiceRequest(
                     amtMsat = paymentMsat,
@@ -489,10 +529,8 @@ class PaymentTest {
                     assetAmount = 100u,
                 )
             ).invoice
-            step = "sendPayment1"
             sendPaymentWithLnBalance(nodeA, nodeB, invoice1, assetId, 100u, 600u, 0u)
 
-            step = "decodeInvoice1"
             val decoded1 = nodeA.decodeLnInvoice(invoice1)
             assertEquals(assetId, decoded1.assetId)
             assertEquals(100uL, decoded1.assetAmount)
@@ -502,31 +540,26 @@ class PaymentTest {
             assertEquals("Regtest", decoded1.network)
             assertEquals(InvoiceStatus.SUCCEEDED, nodeB.invoiceStatus(invoice1))
 
-            step = "getPayment1Sender"
             val payment1Sender = waitForPaymentStatus(nodeA, decoded1.paymentHash, 60L)
             assertEquals(HtlcStatus.SUCCEEDED, payment1Sender.status)
             assertEquals(assetId, payment1Sender.assetId)
             assertEquals(100uL, payment1Sender.assetAmount)
             checkPreimageMatchesHash(payment1Sender, decoded1.paymentHash)
 
-            step = "getPayment1Receiver"
             val payment1Receiver = waitForPaymentStatus(nodeB, decoded1.paymentHash, 60L)
             assertEquals(HtlcStatus.SUCCEEDED, payment1Receiver.status)
             assertEquals(assetId, payment1Receiver.assetId)
             assertEquals(100uL, payment1Receiver.assetAmount)
             checkPreimageMatchesHash(payment1Receiver, decoded1.paymentHash)
 
-            step = "listPayment1Sender"
             val listedPayment1Sender = waitForPaymentPresentInList(nodeA, decoded1.paymentHash, 60L)
             assertEquals(decoded1.paymentHash, listedPayment1Sender.paymentHash)
             checkPreimageMatchesHash(listedPayment1Sender, decoded1.paymentHash)
 
-            step = "listPayment1Receiver"
             val listedPayment1Receiver = waitForPaymentPresentInList(nodeB, decoded1.paymentHash, 60L)
             assertEquals(decoded1.paymentHash, listedPayment1Receiver.paymentHash)
             checkPreimageMatchesHash(listedPayment1Receiver, decoded1.paymentHash)
 
-            step = "lnInvoice2"
             val invoice2 = nodeA.lnInvoice(
                 LnInvoiceRequest(
                     amtMsat = paymentMsat,
@@ -535,10 +568,8 @@ class PaymentTest {
                     assetAmount = 50u,
                 )
             ).invoice
-            step = "sendPayment2"
             sendPaymentWithLnBalance(nodeB, nodeA, invoice2, assetId, 50u, 100u, 500u)
 
-            step = "decodeInvoice2"
             val decoded2 = nodeA.decodeLnInvoice(invoice2)
             val payment2Receiver = waitForPaymentStatus(nodeA, decoded2.paymentHash, 60L)
             assertEquals(assetId, payment2Receiver.assetId)
@@ -551,7 +582,6 @@ class PaymentTest {
             assertEquals(HtlcStatus.SUCCEEDED, payment2Sender.status)
             checkPreimageMatchesHash(payment2Sender, decoded2.paymentHash)
 
-            step = "lnInvoice3"
             val invoice3 = nodeB.lnInvoice(
                 LnInvoiceRequest(
                     amtMsat = paymentMsat,
@@ -560,7 +590,6 @@ class PaymentTest {
                     assetAmount = 50u,
                 )
             ).invoice
-            step = "sendPayment3"
             nodeA.sendpayment(
                 SdkSendPaymentRequest(
                     invoice = invoice3,
@@ -581,7 +610,6 @@ class PaymentTest {
             assertEquals(HtlcStatus.SUCCEEDED, payment3Receiver.status)
             checkPreimageMatchesHash(payment3Receiver, decoded3.paymentHash)
 
-            step = "lnInvoice4"
             val invoice4 = nodeA.lnInvoice(
                 LnInvoiceRequest(
                     amtMsat = paymentMsat,
@@ -590,7 +618,6 @@ class PaymentTest {
                     assetAmount = 50u,
                 )
             ).invoice
-            step = "sendPayment4"
             nodeB.sendpayment(
                 SdkSendPaymentRequest(
                     invoice = invoice4,
@@ -611,7 +638,6 @@ class PaymentTest {
             assertEquals(HtlcStatus.SUCCEEDED, payment4Sender.status)
             checkPreimageMatchesHash(payment4Sender, decoded4.paymentHash)
 
-            step = "channelsAfterPayments"
             waitForStableChannelBalances(
                 nodeA = nodeA,
                 nodeB = nodeB,
@@ -629,12 +655,10 @@ class PaymentTest {
             assertEquals(chan1Before.localBalanceSat, chan1.localBalanceSat)
             assertEquals(chan2Before.localBalanceSat, chan2.localBalanceSat)
 
-            step = "closeChannel"
             closeChannel(nodeA, channelId, infoB.pubkey)
             waitForBalance(nodeA, assetId, 950uL, 70L)
             waitForBalance(nodeB, assetId, 50uL, 70L)
 
-            step = "sendRgb1"
             val recipientId1 = rgbInvoice(nodeC)
             sendRgb(nodeA, assetId, recipientId1, 925u)
             mine(1)
@@ -642,7 +666,6 @@ class PaymentTest {
             refreshTransfers(nodeC)
             refreshTransfers(nodeA)
 
-            step = "sendRgb2"
             val recipientId2 = rgbInvoice(nodeC)
             sendRgb(nodeB, assetId, recipientId2, 25u)
             mine(1)
@@ -650,12 +673,10 @@ class PaymentTest {
             refreshTransfers(nodeC)
             refreshTransfers(nodeB)
 
-            step = "finalBalances"
             assertEquals(25uL, assetBalanceSpendable(nodeA, assetId))
             assertEquals(25uL, assetBalanceSpendable(nodeB, assetId))
             assertEquals(950uL, assetBalanceSpendable(nodeC, assetId))
 
-            step = "transactions"
             val transactions = nodeA.listTransactions(false)
             val txUser = transactions.first { it.received == 100_000_000uL }
             val txUtxos = transactions.first { it.sent == 100_000_000uL }
@@ -665,7 +686,6 @@ class PaymentTest {
             assertEquals(TransactionType.RGB_SEND, txSend.transactionType)
             assertNotNull(txUtxos.confirmationTime)
 
-            step = "transfers"
             val transfers = nodeA.listTransfers(assetId)
             val xfer1 = transfers.first { it.idx == 1 }
             assertEquals("Settled", xfer1.status)
@@ -702,8 +722,6 @@ class PaymentTest {
             assertTrue(xfer3.transportEndpoints.isNotEmpty())
 
             log("SUCCESS: Android payment parity flow completed")
-        } catch (e: Exception) {
-            throw RuntimeException("FAILED at step=$step: ${e.message}", e)
         } finally {
             safeShutdown(nodeA)
             safeShutdown(nodeB)

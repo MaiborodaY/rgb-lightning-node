@@ -228,6 +228,8 @@ pub(crate) fn make_node(
         ldk_peer_listening_port,
         network: "regtest".to_string(),
         max_media_upload_size_mb: 20,
+        enable_virtual_channels_v0: Some(false),
+        virtual_peer_pubkeys: None,
     })
     .expect("create SDK node")
 }
