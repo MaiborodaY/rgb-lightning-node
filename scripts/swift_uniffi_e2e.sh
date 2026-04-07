@@ -28,10 +28,11 @@ ensure_regtest_available() {
   done
 }
 
-if [[ "$(uname -s)" != "Darwin" ]]; then
-  echo "swift-e2e requires macOS"
-  exit 1
-fi
+# [TEST: Linux runner] Original macOS-only guard commented out for ubuntu runner testing.
+# if [[ "$(uname -s)" != "Darwin" ]]; then
+#   echo "swift-e2e requires macOS"
+#   exit 1
+# fi
 
 need_cmd cargo
 need_cmd rustup
@@ -40,34 +41,55 @@ need_cmd docker
 
 ensure_regtest_available
 
-case "$(uname -m)" in
-  arm64)
-    MACOS_RUST_TARGET="${SWIFT_UNIFFI_RUST_TARGET:-aarch64-apple-darwin}"
+# [TEST: Linux runner] Original macOS-only target detection:
+# case "$(uname -m)" in
+#   arm64)
+#     MACOS_RUST_TARGET="${SWIFT_UNIFFI_RUST_TARGET:-aarch64-apple-darwin}"
+#     ;;
+#   x86_64)
+#     MACOS_RUST_TARGET="${SWIFT_UNIFFI_RUST_TARGET:-x86_64-apple-darwin}"
+#     ;;
+#   *)
+#     echo "unsupported macOS architecture: $(uname -m)"
+#     exit 1
+#     ;;
+# esac
+
+# [TEST: Linux runner] Cross-platform target detection (macOS + Linux).
+case "$(uname -s)" in
+  Darwin)
+    case "$(uname -m)" in
+      arm64)  RUST_TARGET="${SWIFT_UNIFFI_RUST_TARGET:-aarch64-apple-darwin}" ;;
+      x86_64) RUST_TARGET="${SWIFT_UNIFFI_RUST_TARGET:-x86_64-apple-darwin}" ;;
+      *)      echo "unsupported macOS architecture: $(uname -m)"; exit 1 ;;
+    esac
+    LIB_DIR="Libraries/macos"
     ;;
-  x86_64)
-    MACOS_RUST_TARGET="${SWIFT_UNIFFI_RUST_TARGET:-x86_64-apple-darwin}"
+  Linux)
+    RUST_TARGET="${SWIFT_UNIFFI_RUST_TARGET:-x86_64-unknown-linux-gnu}"
+    LIB_DIR="Libraries/linux"
     ;;
   *)
-    echo "unsupported macOS architecture: $(uname -m)"
+    echo "unsupported OS: $(uname -s)"
     exit 1
     ;;
 esac
 
-rustup target add "$MACOS_RUST_TARGET"
+rustup target add "$RUST_TARGET"
 
 cd "$ROOT_DIR"
-cargo build --release --features uniffi --lib --target "$MACOS_RUST_TARGET"
+cargo build --release --features uniffi --lib --target "$RUST_TARGET"
 ./scripts/ci/uniffi_generate_swift.sh
 
 mkdir -p \
   "$TEST_DIR/Sources/RGBLightningNode" \
   "$TEST_DIR/FFI" \
-  "$TEST_DIR/Libraries/macos"
+  "$TEST_DIR/$LIB_DIR"
 
 cp "$SWIFT_GEN_DIR/RGBLightningNode.swift" "$TEST_DIR/Sources/RGBLightningNode/RGBLightningNode.swift"
 cp "$SWIFT_GEN_DIR/RGBLightningNodeFFI.h" "$TEST_DIR/FFI/RGBLightningNodeFFI.h"
 cp "$SWIFT_GEN_DIR/RGBLightningNodeFFI.modulemap" "$TEST_DIR/FFI/module.modulemap"
-cp "$ROOT_DIR/target/$MACOS_RUST_TARGET/release/librgb_lightning_node.a" "$TEST_DIR/Libraries/macos/librgb_lightning_node.a"
+cp "$ROOT_DIR/target/$RUST_TARGET/release/librgb_lightning_node.a" "$TEST_DIR/$LIB_DIR/librgb_lightning_node.a"
 
 cd "$TEST_DIR"
 swift test

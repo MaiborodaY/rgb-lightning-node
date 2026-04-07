@@ -1,11 +1,20 @@
 // swift-tools-version: 5.9
 import PackageDescription
 
+// [TEST: Linux runner] Platform-dependent library path for ubuntu runner testing.
+// Original macOS-only: let libraryPath = "Libraries/macos"
+#if os(macOS)
+let libraryPath = "Libraries/macos"
+#else
+let libraryPath = "Libraries/linux"
+#endif
+
 let package = Package(
     name: "SwiftUniffiE2E",
-    platforms: [
-        .macOS(.v13),
-    ],
+    // [TEST: Linux runner] Original macOS platform constraint:
+    // platforms: [
+    //     .macOS(.v13),
+    // ],
     products: [
         .library(name: "RGBLightningNode", targets: ["RGBLightningNode"]),
     ],
@@ -21,7 +30,7 @@ let package = Package(
             linkerSettings: [
                 .unsafeFlags([
                     "-L",
-                    "Libraries/macos",
+                    libraryPath,  // [TEST: Linux runner] was: "Libraries/macos"
                 ]),
                 .linkedLibrary("rgb_lightning_node"),
             ]

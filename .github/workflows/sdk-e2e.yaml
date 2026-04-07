@@ -348,15 +348,24 @@ jobs:
         if: always()
         run: ./regtest.sh stop
 
+  # [TEST: Linux runner] Testing Swift E2E on ubuntu — Docker available natively.
+  # Original macOS config (getmac / self-hosted):
+  #   runs-on: getmac
+  #   (no Setup Swift step needed — Swift is pre-installed on macOS)
   swift-e2e:
     name: Swift E2E Smoke
-    runs-on: getmac
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: true
+
+      - name: Setup Swift
+        uses: swiftlang/setup-swift@v2
+        with:
+          swift-version: "5.10"
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
