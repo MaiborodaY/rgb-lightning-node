@@ -143,13 +143,15 @@ class ConcurrentBtcPaymentsTest {
         assertTrue("$name still underfunded: $after < $minSat", after >= minSat)
     }
 
+    // Align with Python E2E: pass explicit UTXO size (100k sat)
+    // instead of null to ensure deterministic UTXO layout for channel funding.
     private fun fundAndCreateUtxos(node: SdkNode, name: String) {
         ensureFunded(node, name, 1u, "1")
         node.createutxos(
             SdkCreateUtxosRequest(
                 upTo = false,
                 num = utxosNum,
-                size = null,
+                size = 100_000u,
                 feeRate = utxosFeeRate,
                 skipSync = false,
             )

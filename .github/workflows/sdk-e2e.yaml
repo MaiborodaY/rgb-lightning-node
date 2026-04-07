@@ -348,16 +348,21 @@ jobs:
         if: always()
         run: ./regtest.sh stop
 
-  # Requires a self-hosted macOS runner with Docker available for local regtest services.
+  # Docker on macOS ARM runners may fail if GitHub hasn't enabled
+  # nested virtualization yet. Falls back to a fast failure instead
+  # of hanging indefinitely on a missing self-hosted runner.
   swift-e2e:
     name: Swift E2E Smoke
-    runs-on: [self-hosted, macOS]
-    timeout-minutes: 45
+    runs-on: macos-15
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: true
+
+      - name: Setup Docker
+        uses: docker/setup-docker-action@v4
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1

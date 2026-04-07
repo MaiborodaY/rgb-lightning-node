@@ -193,13 +193,15 @@ private fun ensureFundedWithAmount(
     }
 }
 
+// Align with Python E2E: pass explicit UTXO size instead of null
+// to ensure deterministic UTXO layout for channel funding.
 private fun fundAndCreateUtxos(node: SdkNode, name: String) {
     ensureFundedWithAmount(node, name, 1u, "1")
     node.createutxos(
         SdkCreateUtxosRequest(
             upTo = false,
             num = CREATE_UTXOS_NUM,
-            size = null,
+            size = CREATE_UTXOS_SIZE_SAT,
             feeRate = 7u,
             skipSync = false,
         )
