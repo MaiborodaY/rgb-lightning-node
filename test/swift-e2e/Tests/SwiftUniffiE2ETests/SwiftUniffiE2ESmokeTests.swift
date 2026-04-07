@@ -30,6 +30,8 @@ final class SwiftUniffiE2ESmokeTests: XCTestCase {
         )
         defer { node.shutdown() }
 
+        let _ = try node.`init`(password: "swift-e2e-pass", mnemonicPhrase: nil)
+
         try node.unlock(
             request: SdkUnlockRequest(
                 password: "swift-e2e-pass",
