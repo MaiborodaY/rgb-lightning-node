@@ -86,8 +86,8 @@ jobs:
 
       - name: Run Python UniFFI scenario
         env:
-          PYTHONPATH: ${{ github.workspace }}/python-artifacts/target/uniffi/python
-          LD_LIBRARY_PATH: ${{ github.workspace }}/python-artifacts/target/release
+          PYTHONPATH: ${{ github.workspace }}/python-artifacts/uniffi/python
+          LD_LIBRARY_PATH: ${{ github.workspace }}/python-artifacts/release
           RESET_DATA: "1"
           PYTHON_E2E_SCENARIO: ${{ matrix.scenario }}
         run: python3 test/python-e2e/PythonUniffiE2e.py
@@ -192,8 +192,8 @@ jobs:
       - name: Run Kotlin UniFFI scenario
         env:
           JNA_JAR: /usr/share/java/jna.jar
-          KOTLIN_E2E_JAR: ${{ github.workspace }}/kotlin-artifacts/target/uniffi/kotlin-e2e/e2e.jar
-          KOTLIN_E2E_LIB_DIR: ${{ github.workspace }}/kotlin-artifacts/target/release
+          KOTLIN_E2E_JAR: ${{ github.workspace }}/kotlin-artifacts/uniffi/kotlin-e2e/e2e.jar
+          KOTLIN_E2E_LIB_DIR: ${{ github.workspace }}/kotlin-artifacts/release
           RESET_DATA: "1"
           KOTLIN_E2E_SCENARIO: ${{ matrix.scenario }}
         run: ./scripts/ci/run_kotlin_e2e.sh
@@ -321,7 +321,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: android-uniffi-x86_64
-          path: target/uniffi
+          path: target/uniffi/kotlin-android
 
       - name: Start regtest services
         run: ./regtest.sh start
