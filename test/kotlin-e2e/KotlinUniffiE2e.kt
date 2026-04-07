@@ -685,7 +685,9 @@ private fun openchannelPushAssetAmountScenario() {
 
         var fundingTxid = waitForChannelFundingTx(nodeA, nodeB, assetId, 120L)
         confirmChannelFunding(nodeA, assetId, fundingTxid)
+        // Wait for channel usable on both sides before attempting keysend.
         waitForUsableChannel(nodeA, nodeB, assetId, 300L)
+        waitForUsableChannel(nodeB, nodeA, assetId, 60L)
 
         val partialChannelId = nodeA.getChannelId(partialPushChannel.temporaryChannelId)
         val nodeAPartial = nodeA.listChannels().first { it.channelId == partialChannelId }

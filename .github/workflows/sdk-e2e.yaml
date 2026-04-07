@@ -348,26 +348,15 @@ jobs:
         if: always()
         run: ./regtest.sh stop
 
-  # Docker on macOS ARM: Colima with Virtualization.framework (VZ)
-  # provides native VM support without nested virtualization (unlike QEMU).
   swift-e2e:
     name: Swift E2E Smoke
-    runs-on: macos-15
+    runs-on: getmac
     timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: true
-
-      - name: Setup Docker via Colima (VZ)
-        run: |
-          brew install docker docker-compose colima
-          mkdir -p ~/.docker/cli-plugins
-          ln -sfn "$(brew --prefix docker-compose)/bin/docker-compose" ~/.docker/cli-plugins/docker-compose
-          colima start --vm-type vz --cpu 3 --memory 6 --disk 20
-          docker info
-          docker compose version
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
