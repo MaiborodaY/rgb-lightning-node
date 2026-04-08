@@ -1,12 +1,12 @@
 use electrum_client::ElectrumApi;
 use once_cell::sync::Lazy;
 pub(crate) use rgb_lightning_node::{
-    AssetBalanceInfo, AssetRecipients, AssignmentKind, Channel, ContractId, HtlcStatus, InvoiceStatus,
-    LnInvoiceRequest, Payment, PaymentHash, RecipientId, RgbRecipient, SdkCloseChannelRequest,
-    SdkCreateUtxosRequest, SdkInitRequest, SdkIssueAssetCfaRequest, SdkIssueAssetNiaRequest,
-    SdkKeysendRequest, SdkNode, SdkOpenChannelRequest, SdkRefreshTransfersRequest,
-    SdkRgbInvoiceRequest, SdkSendBtcRequest, SdkSendPaymentRequest, SdkUnlockRequest,
-    SendRgbRequest, TransactionType, TransportEndpoint, WitnessData,
+    AssetBalanceInfo, AssetRecipients, AssignmentKind, Channel, ContractId, HtlcStatus,
+    InvoiceStatus, LnInvoiceRequest, Payment, PaymentHash, RecipientId, RgbRecipient,
+    SdkCloseChannelRequest, SdkCreateUtxosRequest, SdkInitRequest, SdkIssueAssetCfaRequest,
+    SdkIssueAssetNiaRequest, SdkKeysendRequest, SdkNode, SdkOpenChannelRequest,
+    SdkRefreshTransfersRequest, SdkRgbInvoiceRequest, SdkSendBtcRequest, SdkSendPaymentRequest,
+    SdkUnlockRequest, SendRgbRequest, TransactionType, TransportEndpoint, WitnessData,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -312,7 +312,8 @@ pub(crate) fn wait_for_asset_balance(
 ) -> AssetBalanceInfo {
     let deadline = Instant::now() + timeout;
     loop {
-        node.sync().expect("node sync while waiting for asset_balance");
+        node.sync()
+            .expect("node sync while waiting for asset_balance");
         if let Ok(balance) = node.asset_balance(asset_id.clone()) {
             return balance;
         }
@@ -332,8 +333,12 @@ pub(crate) fn wait_for_channel_funding_tx(
 ) {
     let deadline = Instant::now() + timeout;
     loop {
-        node_a.sync().expect("node A sync while waiting for funding tx");
-        node_b.sync().expect("node B sync while waiting for funding tx");
+        node_a
+            .sync()
+            .expect("node A sync while waiting for funding tx");
+        node_b
+            .sync()
+            .expect("node B sync while waiting for funding tx");
 
         let funding_seen = node_a
             .list_channels()
@@ -365,12 +370,16 @@ where
 {
     let deadline = Instant::now() + timeout;
     let channel_id = loop {
-        node.sync().expect("node sync while waiting for channel open");
+        node.sync()
+            .expect("node sync while waiting for channel open");
         let channels = node
             .list_channels()
             .expect("list_channels while waiting for channel open");
 
-        if let Some(channel) = channels.iter().find(|channel| matcher(channel) && !channel.ready) {
+        if let Some(channel) = channels
+            .iter()
+            .find(|channel| matcher(channel) && !channel.ready)
+        {
             if let Some(txid) = &channel.funding_txid {
                 if !get_txout(&txid.to_string()).trim().is_empty() {
                     mine(OPEN_CHANNEL_CONFIRM_BLOCKS);
@@ -415,7 +424,10 @@ pub(crate) fn wait_for_usable_channel(
             return;
         }
 
-        assert!(Instant::now() < deadline, "timeout waiting for usable channel");
+        assert!(
+            Instant::now() < deadline,
+            "timeout waiting for usable channel"
+        );
         if polls % 5 == 0 {
             mine(1);
         }
@@ -470,10 +482,7 @@ pub(crate) fn wait_for_usable_channels(
     }
 }
 
-pub(crate) fn wait_for_usable_channel_counts(
-    nodes: &[(&SdkNode, usize)],
-    timeout: Duration,
-) {
+pub(crate) fn wait_for_usable_channel_counts(nodes: &[(&SdkNode, usize)], timeout: Duration) {
     let deadline = Instant::now() + timeout;
     let mut polls = 0u32;
     loop {
@@ -509,7 +518,9 @@ pub(crate) fn wait_for_usable_channel_counts(
 pub(crate) fn wait_for_num_peers(node: &SdkNode, expected_num_peers: u64, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     loop {
-        let node_info = node.node_info().expect("node_info while waiting for num_peers");
+        let node_info = node
+            .node_info()
+            .expect("node_info while waiting for num_peers");
         if node_info.num_peers == expected_num_peers {
             return;
         }
@@ -536,7 +547,10 @@ pub(crate) fn wait_for_payment_status(
             }
         }
 
-        assert!(Instant::now() < deadline, "timeout waiting for payment success");
+        assert!(
+            Instant::now() < deadline,
+            "timeout waiting for payment success"
+        );
         sleep(Duration::from_secs(1));
     }
 }
@@ -597,7 +611,10 @@ pub(crate) fn wait_for_payment_present_in_list(
         {
             return payment;
         }
-        assert!(Instant::now() < deadline, "payment not found in list_payments");
+        assert!(
+            Instant::now() < deadline,
+            "payment not found in list_payments"
+        );
         sleep(Duration::from_secs(1));
     }
 }
@@ -755,7 +772,10 @@ pub(crate) fn close_channel_with_force(
         let channels = node
             .list_channels()
             .expect("list_channels while waiting for close");
-        if !channels.iter().any(|channel| channel.channel_id == channel_id) {
+        if !channels
+            .iter()
+            .any(|channel| channel.channel_id == channel_id)
+        {
             mine_blocks(true, if force { 144 } else { 6 });
             return;
         }

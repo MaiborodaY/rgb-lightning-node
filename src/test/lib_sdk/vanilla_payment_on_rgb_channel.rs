@@ -57,7 +57,9 @@ fn vanilla_payment_on_rgb_channel() {
 
         let node_b_pubkey = node_b.node_info().expect("node B node_info").pubkey;
         let peer_uri = format!("{node_b_pubkey}@127.0.0.1:{}", NODE_B_PEER_PORT + 50);
-        node_a.connectpeer(peer_uri.clone()).expect("node A connectpeer");
+        node_a
+            .connectpeer(peer_uri.clone())
+            .expect("node A connectpeer");
 
         let open_channel = node_a
             .openchannel(SdkOpenChannelRequest {
@@ -141,8 +143,14 @@ fn vanilla_payment_on_rgb_channel() {
         assert_eq!(channels_2.len(), 1);
         let chan_1 = &channels_1[0];
         let chan_2 = &channels_2[0];
-        assert_eq!(chan_1.local_balance_sat, chan_1_before.local_balance_sat - amount / 1000);
-        assert_eq!(chan_2.local_balance_sat, chan_2_before.local_balance_sat + amount / 1000);
+        assert_eq!(
+            chan_1.local_balance_sat,
+            chan_1_before.local_balance_sat - amount / 1000
+        );
+        assert_eq!(
+            chan_2.local_balance_sat,
+            chan_2_before.local_balance_sat + amount / 1000
+        );
 
         close_channel(&node_a, channel_id, node_b_pubkey);
         wait_for_balance(&node_a, &asset_id, 1000, Duration::from_secs(70));

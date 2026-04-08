@@ -61,7 +61,9 @@ fn close_coop_other_side() {
         let node_b_pubkey = node_b.node_info().expect("node B node_info").pubkey;
 
         let peer_uri = format!("{node_b_pubkey}@127.0.0.1:{}", NODE_B_PEER_PORT + 60);
-        node_a.connectpeer(peer_uri.clone()).expect("node A connectpeer");
+        node_a
+            .connectpeer(peer_uri.clone())
+            .expect("node A connectpeer");
 
         let open_channel = node_a
             .openchannel(SdkOpenChannelRequest {

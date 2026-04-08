@@ -1,18 +1,20 @@
 use crate::helpers::*;
-use bitcoin::hex::{DisplayHex, FromHex};
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::Hash;
+use bitcoin::hex::{DisplayHex, FromHex};
 use serial_test::serial;
 use std::{fs, time::Duration};
 
 fn check_preimage_matches_hash(payment: &Payment, expected_payment_hash: &PaymentHash) {
     let payment_preimage = payment.preimage.as_ref().expect("payment preimage");
-    let payment_preimage_hash = Sha256::hash(
-        &Vec::from_hex(payment_preimage).expect("preimage hex"),
-    )
-    .to_byte_array()
-    .to_lower_hex_string();
-    assert_eq!(payment_preimage_hash, expected_payment_hash.0.to_lower_hex_string());
+    let payment_preimage_hash =
+        Sha256::hash(&Vec::from_hex(payment_preimage).expect("preimage hex"))
+            .to_byte_array()
+            .to_lower_hex_string();
+    assert_eq!(
+        payment_preimage_hash,
+        expected_payment_hash.0.to_lower_hex_string()
+    );
 }
 
 #[test]
@@ -85,7 +87,9 @@ fn success() {
 
         let node_b_pubkey = node_b.node_info().expect("node B node_info").pubkey;
         let peer_uri = format!("{node_b_pubkey}@127.0.0.1:{NODE_B_PEER_PORT}");
-        node_a.connectpeer(peer_uri.clone()).expect("node A connectpeer");
+        node_a
+            .connectpeer(peer_uri.clone())
+            .expect("node A connectpeer");
 
         let open_channel = node_a
             .openchannel(SdkOpenChannelRequest {
@@ -169,12 +173,18 @@ fn success() {
         assert_eq!(receiver_payment.asset_amount, Some(asset_amount));
         check_preimage_matches_hash(&receiver_payment, &decoded.payment_hash);
 
-        let payment =
-            wait_for_payment_present_in_list(&node_a, &decoded.payment_hash, Duration::from_secs(60));
+        let payment = wait_for_payment_present_in_list(
+            &node_a,
+            &decoded.payment_hash,
+            Duration::from_secs(60),
+        );
         assert_eq!(payment.payment_hash, decoded.payment_hash);
         check_preimage_matches_hash(&payment, &decoded.payment_hash);
-        let payment =
-            wait_for_payment_present_in_list(&node_b, &decoded.payment_hash, Duration::from_secs(60));
+        let payment = wait_for_payment_present_in_list(
+            &node_b,
+            &decoded.payment_hash,
+            Duration::from_secs(60),
+        );
         assert_eq!(payment.payment_hash, decoded.payment_hash);
         check_preimage_matches_hash(&payment, &decoded.payment_hash);
 
@@ -413,7 +423,10 @@ fn success() {
             .expect("transfer 2");
         assert_eq!(xfer_2.status, "Settled");
         assert_eq!(xfer_2.kind, "Send");
-        assert_eq!(xfer_2.requested_assignment, Some("Fungible(600)".to_string()));
+        assert_eq!(
+            xfer_2.requested_assignment,
+            Some("Fungible(600)".to_string())
+        );
         assert_eq!(xfer_2.assignments, vec!["Fungible(400)".to_string()]);
         assert!(xfer_2.txid.is_some());
         assert!(xfer_2.recipient_id.is_some());

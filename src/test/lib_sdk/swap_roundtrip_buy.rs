@@ -1,5 +1,7 @@
 use crate::helpers::*;
-use rgb_lightning_node::{SdkMakerExecuteRequest, SdkMakerInitRequest, SdkTakerRequest, SwapStatus};
+use rgb_lightning_node::{
+    SdkMakerExecuteRequest, SdkMakerInitRequest, SdkTakerRequest, SwapStatus,
+};
 use serial_test::serial;
 use std::cell::Cell;
 use std::{fs, time::Duration};
@@ -12,7 +14,9 @@ fn wait_for_swap_status(
 ) {
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        let swaps = node.list_swaps().expect("list_swaps while waiting for swap status");
+        let swaps = node
+            .list_swaps()
+            .expect("list_swaps while waiting for swap status");
         let swap = swaps
             .maker
             .iter()
@@ -52,9 +56,21 @@ fn swap_roundtrip_buy() {
     let node_b_dir = test_dir.join("node_b");
     let node_c_dir = test_dir.join("node_c");
 
-    let node_a = make_node(&node_a_dir, NODE_A_DAEMON_PORT + 110, NODE_A_PEER_PORT + 110);
-    let node_b = make_node(&node_b_dir, NODE_B_DAEMON_PORT + 110, NODE_B_PEER_PORT + 110);
-    let node_c = make_node(&node_c_dir, NODE_C_DAEMON_PORT + 110, NODE_C_PEER_PORT + 110);
+    let node_a = make_node(
+        &node_a_dir,
+        NODE_A_DAEMON_PORT + 110,
+        NODE_A_PEER_PORT + 110,
+    );
+    let node_b = make_node(
+        &node_b_dir,
+        NODE_B_DAEMON_PORT + 110,
+        NODE_B_PEER_PORT + 110,
+    );
+    let node_c = make_node(
+        &node_c_dir,
+        NODE_C_DAEMON_PORT + 110,
+        NODE_C_PEER_PORT + 110,
+    );
     let original_node_a_shutdown = Cell::new(false);
     let original_node_b_shutdown = Cell::new(false);
 
@@ -221,7 +237,11 @@ fn swap_roundtrip_buy() {
         let swaps_maker = node_a.list_swaps().expect("node A list_swaps pending");
         assert_eq!(swaps_maker.maker.len(), 1);
         assert!(matches!(
-            swaps_maker.maker.first().expect("maker swap pending").status,
+            swaps_maker
+                .maker
+                .first()
+                .expect("maker swap pending")
+                .status,
             SwapStatus::Pending
         ));
         wait_for_swap_status(
@@ -239,8 +259,16 @@ fn swap_roundtrip_buy() {
         original_node_a_shutdown.set(true);
         original_node_b_shutdown.set(true);
 
-        let node_a = make_node(&node_a_dir, NODE_A_DAEMON_PORT + 110, NODE_A_PEER_PORT + 110);
-        let node_b = make_node(&node_b_dir, NODE_B_DAEMON_PORT + 110, NODE_B_PEER_PORT + 110);
+        let node_a = make_node(
+            &node_a_dir,
+            NODE_A_DAEMON_PORT + 110,
+            NODE_A_PEER_PORT + 110,
+        );
+        let node_b = make_node(
+            &node_b_dir,
+            NODE_B_DAEMON_PORT + 110,
+            NODE_B_PEER_PORT + 110,
+        );
         node_a
             .unlock(unlock_request("nodeApass"))
             .expect("node A unlock after restart");
@@ -257,24 +285,46 @@ fn swap_roundtrip_buy() {
         assert_eq!(balance_b.offchain_outbound, 10);
         assert_eq!(balance_b.offchain_inbound, 590);
 
-        let swaps_maker = node_a.list_swaps().expect("node A list_swaps after restart");
+        let swaps_maker = node_a
+            .list_swaps()
+            .expect("node A list_swaps after restart");
         assert_eq!(swaps_maker.maker.len(), 1);
         assert!(matches!(
-            swaps_maker.maker.first().expect("maker swap after restart").status,
+            swaps_maker
+                .maker
+                .first()
+                .expect("maker swap after restart")
+                .status,
             SwapStatus::Succeeded
         ));
-        let swaps_taker = node_b.list_swaps().expect("node B list_swaps after restart");
+        let swaps_taker = node_b
+            .list_swaps()
+            .expect("node B list_swaps after restart");
         assert_eq!(swaps_taker.taker.len(), 1);
         assert!(matches!(
-            swaps_taker.taker.first().expect("taker swap after restart").status,
+            swaps_taker
+                .taker
+                .first()
+                .expect("taker swap after restart")
+                .status,
             SwapStatus::Succeeded
         ));
 
-        assert!(node_a.list_payments().expect("node A list_payments").is_empty());
-        assert!(node_b.list_payments().expect("node B list_payments").is_empty());
+        assert!(node_a
+            .list_payments()
+            .expect("node A list_payments")
+            .is_empty());
+        assert!(node_b
+            .list_payments()
+            .expect("node B list_payments")
+            .is_empty());
 
-        let channels_a = node_a.list_channels().expect("node A list_channels after restart");
-        let channels_b = node_b.list_channels().expect("node B list_channels after restart");
+        let channels_a = node_a
+            .list_channels()
+            .expect("node A list_channels after restart");
+        let channels_b = node_b
+            .list_channels()
+            .expect("node B list_channels after restart");
         let chan_a_12 = channels_a
             .iter()
             .find(|channel| channel.channel_id == channel_id_12)

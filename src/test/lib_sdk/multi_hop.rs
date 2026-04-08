@@ -269,9 +269,15 @@ fn multi_hop() {
         assert_eq!(balance_3.offchain_outbound, 50);
         assert_eq!(balance_3.offchain_inbound, 250);
 
-        let channels_1 = node_a.list_channels().expect("node A list_channels after payment");
-        let channels_2 = node_b.list_channels().expect("node B list_channels after payment");
-        let channels_3 = node_c.list_channels().expect("node C list_channels after payment");
+        let channels_1 = node_a
+            .list_channels()
+            .expect("node A list_channels after payment");
+        let channels_2 = node_b
+            .list_channels()
+            .expect("node B list_channels after payment");
+        let channels_3 = node_c
+            .list_channels()
+            .expect("node C list_channels after payment");
         assert_eq!(channels_1.len(), 1);
         assert_eq!(channels_3.len(), 1);
         let chan_1_12 = channels_1
@@ -549,8 +555,12 @@ fn multi_hop() {
             .expect("node A disconnectpeer");
         wait_for_num_peers(&node_a, 0, Duration::from_secs(30));
         wait_for_num_peers(&node_b, 1, Duration::from_secs(30));
-        let node_a_info = node_a.node_info().expect("node A node_info after disconnect");
-        let node_b_info = node_b.node_info().expect("node B node_info after disconnect");
+        let node_a_info = node_a
+            .node_info()
+            .expect("node A node_info after disconnect");
+        let node_b_info = node_b
+            .node_info()
+            .expect("node B node_info after disconnect");
         assert_eq!(node_a_info.num_peers, 0);
         assert_eq!(node_b_info.num_peers, 1);
 

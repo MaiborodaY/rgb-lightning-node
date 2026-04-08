@@ -63,7 +63,9 @@ fn openchannel_push_asset_amount() {
             .asset_id;
 
         let peer_uri = format!("{node_b_pubkey}@127.0.0.1:{}", NODE_B_PEER_PORT + 40);
-        node_a.connectpeer(peer_uri.clone()).expect("node A connectpeer");
+        node_a
+            .connectpeer(peer_uri.clone())
+            .expect("node A connectpeer");
 
         let partial_push_channel = node_a
             .openchannel(SdkOpenChannelRequest {
@@ -90,8 +92,12 @@ fn openchannel_push_asset_amount() {
             .get_channel_id(partial_push_channel.temporary_channel_id)
             .expect("node A get_channel_id partial");
 
-        let channels_1 = node_a.list_channels().expect("node A list_channels partial");
-        let channels_2 = node_b.list_channels().expect("node B list_channels partial");
+        let channels_1 = node_a
+            .list_channels()
+            .expect("node A list_channels partial");
+        let channels_2 = node_b
+            .list_channels()
+            .expect("node B list_channels partial");
         assert_eq!(channels_1.len(), 1);
         assert_eq!(channels_2.len(), 1);
 

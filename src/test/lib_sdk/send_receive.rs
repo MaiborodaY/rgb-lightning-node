@@ -251,7 +251,10 @@ fn send_receive() {
         assert_eq!(decoded.assignment, "Fungible(200)");
         assert_eq!(decoded.network, "Regtest");
         assert!(decoded.expiration_timestamp.is_some());
-        assert_eq!(decoded.transport_endpoints, vec![PROXY_ENDPOINT_LOCAL.to_string()]);
+        assert_eq!(
+            decoded.transport_endpoints,
+            vec![PROXY_ENDPOINT_LOCAL.to_string()]
+        );
 
         let recipient_id_n2b = node_b
             .rgbinvoice(SdkRgbInvoiceRequest {

@@ -10,8 +10,12 @@ fn wait_for_vanilla_channel(
 ) -> lightning::ln::types::ChannelId {
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        node_a.sync().expect("node A sync while waiting for vanilla channel");
-        node_b.sync().expect("node B sync while waiting for vanilla channel");
+        node_a
+            .sync()
+            .expect("node A sync while waiting for vanilla channel");
+        node_b
+            .sync()
+            .expect("node B sync while waiting for vanilla channel");
 
         if let Ok(channel_id) = node_a.get_channel_id(temporary_channel_id) {
             let funded = node_a
@@ -140,8 +144,13 @@ fn run_close_coop_vanilla(name: &str, port_offset: u16, with_anchors: bool) {
 
         let peers = node_a.list_peers().expect("node A list_peers before");
         assert!(!peers.iter().any(|peer| peer.pubkey == node_b_pubkey));
-        let peer_uri = format!("{node_b_pubkey}@127.0.0.1:{}", NODE_B_PEER_PORT + port_offset);
-        node_a.connectpeer(peer_uri.clone()).expect("node A connectpeer");
+        let peer_uri = format!(
+            "{node_b_pubkey}@127.0.0.1:{}",
+            NODE_B_PEER_PORT + port_offset
+        );
+        node_a
+            .connectpeer(peer_uri.clone())
+            .expect("node A connectpeer");
         let peers = node_a.list_peers().expect("node A list_peers after");
         assert!(peers.iter().any(|peer| peer.pubkey == node_b_pubkey));
 
@@ -170,8 +179,14 @@ fn run_close_coop_vanilla(name: &str, port_offset: u16, with_anchors: bool) {
 
         keysend(&node_a, node_b_pubkey, Some(10_000_000), None, None);
         keysend(&node_b, node_a_pubkey, Some(10_000_000), None, None);
-        assert_eq!(node_a.list_payments().expect("node A list_payments").len(), 2);
-        assert_eq!(node_b.list_payments().expect("node B list_payments").len(), 2);
+        assert_eq!(
+            node_a.list_payments().expect("node A list_payments").len(),
+            2
+        );
+        assert_eq!(
+            node_b.list_payments().expect("node B list_payments").len(),
+            2
+        );
 
         let invoice = node_a
             .ln_invoice(LnInvoiceRequest {
@@ -193,8 +208,14 @@ fn run_close_coop_vanilla(name: &str, port_offset: u16, with_anchors: bool) {
         let payment_hash = send_payment.payment_hash.expect("vanilla payment hash");
         wait_for_payment_status(&node_b, &payment_hash, Duration::from_secs(60));
         wait_for_payment_present_in_list(&node_a, &payment_hash, Duration::from_secs(60));
-        assert_eq!(node_a.list_payments().expect("node A list_payments").len(), 3);
-        assert_eq!(node_b.list_payments().expect("node B list_payments").len(), 3);
+        assert_eq!(
+            node_a.list_payments().expect("node A list_payments").len(),
+            3
+        );
+        assert_eq!(
+            node_b.list_payments().expect("node B list_payments").len(),
+            3
+        );
 
         close_channel(&node_a, channel_id, node_b_pubkey);
         wait_for_usable_channels(&node_a, 0, Duration::from_secs(70));

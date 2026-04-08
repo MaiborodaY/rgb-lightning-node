@@ -42,17 +42,23 @@ fn close_coop_standard() {
             .unlock(unlock_request("nodeCpass"))
             .expect("node C unlock");
 
-        let unspents = node_a.list_unspents(false).expect("node A list_unspents before");
+        let unspents = node_a
+            .list_unspents(false)
+            .expect("node A list_unspents before");
         assert_eq!(unspents.len(), 0);
 
         fund_and_create_utxos(&node_a, "node A");
         fund_and_create_utxos(&node_b, "node B");
         fund_and_create_utxos(&node_c, "node C");
 
-        let unspents = node_a.list_unspents(false).expect("node A list_unspents after");
+        let unspents = node_a
+            .list_unspents(false)
+            .expect("node A list_unspents after");
         assert_eq!(unspents.len(), 11);
 
-        let assets = node_a.list_assets(vec![]).expect("node A list_assets before");
+        let assets = node_a
+            .list_assets(vec![])
+            .expect("node A list_assets before");
         assert_eq!(assets.nia.expect("nia before").len(), 0);
         assert_eq!(assets.uda.expect("uda before").len(), 0);
         assert_eq!(assets.cfa.expect("cfa before").len(), 0);
@@ -67,7 +73,9 @@ fn close_coop_standard() {
             .expect("node A issueassetnia")
             .asset_id;
 
-        let assets = node_a.list_assets(vec![]).expect("node A list_assets after");
+        let assets = node_a
+            .list_assets(vec![])
+            .expect("node A list_assets after");
         assert_eq!(assets.nia.expect("nia after").len(), 1);
         assert_eq!(assets.uda.expect("uda after").len(), 0);
         assert_eq!(assets.cfa.expect("cfa after").len(), 0);
@@ -79,9 +87,13 @@ fn close_coop_standard() {
         assert!(!peers.iter().any(|peer| peer.pubkey == node_b_pubkey));
 
         let peer_uri = format!("{node_b_pubkey}@127.0.0.1:{}", NODE_B_PEER_PORT + 20);
-        node_a.connectpeer(peer_uri.clone()).expect("node A connectpeer");
+        node_a
+            .connectpeer(peer_uri.clone())
+            .expect("node A connectpeer");
 
-        let peers = node_a.list_peers().expect("node A list_peers after connect");
+        let peers = node_a
+            .list_peers()
+            .expect("node A list_peers after connect");
         assert!(peers.iter().any(|peer| peer.pubkey == node_b_pubkey));
 
         let open_channel = node_a
