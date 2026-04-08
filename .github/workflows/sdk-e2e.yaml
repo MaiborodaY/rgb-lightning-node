@@ -24,7 +24,7 @@ jobs:
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: 1.85.1
+          toolchain: 1.88.0
           rustflags: ""
 
       - name: Cache Rust build artifacts
@@ -109,7 +109,7 @@ jobs:
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: 1.85.1
+          toolchain: 1.88.0
           rustflags: ""
 
       - name: Cache Rust build artifacts
@@ -217,7 +217,7 @@ jobs:
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: 1.85.1
+          toolchain: 1.88.0
           rustflags: ""
 
       - name: Cache Rust build artifacts
