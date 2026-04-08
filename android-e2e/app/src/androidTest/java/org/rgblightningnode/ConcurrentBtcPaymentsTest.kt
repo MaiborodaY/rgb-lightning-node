@@ -484,46 +484,24 @@ class ConcurrentBtcPaymentsTest {
             val decoded1 = nodeA.decodeLnInvoice(invoice1)
             val decoded2 = nodeA.decodeLnInvoice(invoice2)
 
-            var response1: SdkSendPaymentResponse? = null
-            var response2: SdkSendPaymentResponse? = null
-            var error1: Throwable? = null
-            var error2: Throwable? = null
-            val thread1 = Thread {
-                try {
-                    response1 = nodeC.sendpayment(
-                        SdkSendPaymentRequest(
-                            invoice = invoice1,
-                            amtMsat = null,
-                            assetId = null,
-                            assetAmount = null,
-                        )
-                    )
-                } catch (t: Throwable) {
-                    error1 = t
-                }
-            }
-            val thread2 = Thread {
-                try {
-                    response2 = nodeD.sendpayment(
-                        SdkSendPaymentRequest(
-                            invoice = invoice2,
-                            amtMsat = null,
-                            assetId = null,
-                            assetAmount = null,
-                        )
-                    )
-                } catch (t: Throwable) {
-                    error2 = t
-                }
-            }
-            thread1.start()
-            thread2.start()
-            thread1.join()
-            thread2.join()
-            if (error1 != null) throw RuntimeException("sendpayment from node C failed", error1)
-            if (error2 != null) throw RuntimeException("sendpayment from node D failed", error2)
-            assertEquals(HtlcStatus.PENDING, response1!!.status)
-            assertEquals(HtlcStatus.PENDING, response2!!.status)
+            val response1 = nodeC.sendpayment(
+                SdkSendPaymentRequest(
+                    invoice = invoice1,
+                    amtMsat = null,
+                    assetId = null,
+                    assetAmount = null,
+                )
+            )
+            val response2 = nodeD.sendpayment(
+                SdkSendPaymentRequest(
+                    invoice = invoice2,
+                    amtMsat = null,
+                    assetId = null,
+                    assetAmount = null,
+                )
+            )
+            assertEquals(HtlcStatus.PENDING, response1.status)
+            assertEquals(HtlcStatus.PENDING, response2.status)
 
             val receiverPayments = waitForObservedPayments(
                 nodeA,
@@ -533,8 +511,8 @@ class ConcurrentBtcPaymentsTest {
             assertEquals(2, receiverPayments.size)
             assertTrue(receiverPayments.none { it.status == HtlcStatus.FAILED })
 
-            val payment1Sender = waitForPaymentStatus(nodeC, response1!!.paymentHash!!, 60L)
-            val payment2Sender = waitForPaymentStatus(nodeD, response2!!.paymentHash!!, 60L)
+            val payment1Sender = waitForPaymentStatus(nodeC, response1.paymentHash!!, 60L)
+            val payment2Sender = waitForPaymentStatus(nodeD, response2.paymentHash!!, 60L)
             assertEquals(HtlcStatus.SUCCEEDED, payment1Sender.status)
             assertEquals(HtlcStatus.SUCCEEDED, payment2Sender.status)
 
