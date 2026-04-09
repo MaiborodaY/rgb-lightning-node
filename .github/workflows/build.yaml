@@ -16,15 +16,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        toolchain: [ nightly, stable, 1.85.0 ]
+        toolchain: [ nightly, stable, 1.88.0 ]
         name: [ linux, windows, macos ]
         include:
           - name: linux
-            os: ubuntu-latest
+            os: warp-ubuntu-latest-x64-16x
           - name: windows
-            os: windows-latest
+            os: warp-windows-latest-x64-16x
           - name: macos
-            os: macos-latest
+            os: warp-macos-latest-arm64-6x
     steps:
       - uses: ilammy/setup-nasm@v1
       - uses: actions/checkout@v4
