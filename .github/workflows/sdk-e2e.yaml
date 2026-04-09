@@ -13,7 +13,7 @@ env:
 jobs:
   python-build:
     name: Python E2E Build
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-latest-x64-16x
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -52,7 +52,7 @@ jobs:
 
   python-e2e:
     name: Python E2E (${{ matrix.scenario }})
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-latest-x64-16x
     timeout-minutes: 45
     needs: python-build
     strategy:
@@ -98,7 +98,7 @@ jobs:
 
   kotlin-build:
     name: Kotlin E2E Build
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-latest-x64-16x
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -150,7 +150,7 @@ jobs:
 
   kotlin-e2e:
     name: Kotlin E2E (${{ matrix.scenario }})
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-latest-x64-16x
     timeout-minutes: 45
     needs: kotlin-build
     strategy:
@@ -204,7 +204,7 @@ jobs:
 
   android-build:
     name: Android E2E Build
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-latest-x64-16x
     timeout-minutes: 45
     env:
       ANDROID_NDK_VERSION: 27.3.13750724
@@ -287,7 +287,7 @@ jobs:
 
   android-e2e:
     name: Android E2E (${{ matrix.test_class }})
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-latest-x64-16x
     timeout-minutes: 60
     needs: android-build
     strategy:
@@ -342,11 +342,11 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot-save -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           working-directory: android-e2e
-          script: ./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=${{ matrix.test_class }}
-
-      - name: Dump logcat on failure
-        if: failure()
-        run: adb logcat -d > android-e2e/logcat.txt
+          script: |
+            ./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=${{ matrix.test_class }}; \
+            TEST_EXIT=$?; \
+            adb logcat -d > logcat.txt; \
+            exit $TEST_EXIT
 
       - name: Upload Android test reports
         if: always()
@@ -369,7 +369,7 @@ jobs:
   #   (no Setup Swift step needed — Swift is pre-installed on macOS)
   swift-e2e:
     name: Swift E2E Smoke
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-latest-x64-16x
     timeout-minutes: 60
     steps:
       - name: Checkout repository
