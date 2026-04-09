@@ -343,9 +343,9 @@ jobs:
           disable-animations: true
           working-directory: android-e2e
           script: |
-            ./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=${{ matrix.test_class }}; \
-            TEST_EXIT=$?; \
-            adb logcat -d > logcat.txt; \
+            ./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=${{ matrix.test_class }}
+            TEST_EXIT=$?
+            adb logcat -d > logcat.txt
             exit $TEST_EXIT
 
       - name: Upload Android test reports
