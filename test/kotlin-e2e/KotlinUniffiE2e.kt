@@ -562,6 +562,7 @@ private fun paymentScenario() {
         } catch (_: RlnException.Conflict) {
             println("connectpeer: already connected")
         }
+        waitForPeer(nodeA, infoB.pubkey, 20L)
 
         val openResponse = nodeA.openchannel(
             SdkOpenChannelRequest(
@@ -890,8 +891,7 @@ private fun closeCoopVanillaScenario(name: String, portOffset: UInt, withAnchors
 
         val peerUri = "${nodeBPubkey}@127.0.0.1:${(NODE_B_PEER_PORT.toUInt() + portOffset).toInt()}"
         nodeA.connectpeer(peerUri)
-        val peersAfter = nodeA.listPeers()
-        check(peersAfter.any { it.pubkey == nodeBPubkey }) { "node B peer missing after connectpeer" }
+        waitForPeer(nodeA, nodeBPubkey, 20L)
 
         val openChannel = nodeA.openchannel(
             SdkOpenChannelRequest(
@@ -1032,6 +1032,7 @@ private fun openchannelOptionalAddrScenario(
 
             println("connecting peer")
             nodeA.connectpeer("${nodeBPubkey}@127.0.0.1:${(NODE_B_PEER_PORT.toUInt() + portOffset).toInt()}")
+            waitForPeer(nodeA, nodeBPubkey, 20L)
 
             println("opening channel with no addr (peer connected)")
             nodeA.openchannel(
@@ -1066,6 +1067,7 @@ private fun openchannelOptionalAddrScenario(
 
             println("connecting peer")
             nodeA.connectpeer("${nodeBPubkey}@127.0.0.1:${(NODE_B_PEER_PORT.toUInt() + portOffset).toInt()}")
+            waitForPeer(nodeA, nodeBPubkey, 20L)
 
             println("opening channel with no addr (peer connected)")
             nodeB.openchannel(
