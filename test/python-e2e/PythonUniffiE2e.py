@@ -460,6 +460,19 @@ def wait_for_usable_channels(node: rln.SdkNode, expected_count: int, timeout_sec
     )
 
 
+def wait_for_peer(node: rln.SdkNode, peer_pubkey, timeout_sec: int):
+    expected = str(peer_pubkey)
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        if any(str(peer.pubkey) == expected for peer in node.list_peers()):
+            return
+        print(f"waiting for peer connection: {expected}")
+        time.sleep(1)
+    raise RuntimeError(
+        f"peer did not appear in list_peers() after {timeout_sec}s: peer={expected}"
+    )
+
+
 def keysend(sender: rln.SdkNode, dest_pubkey: str, amt_msat, asset_id, asset_amount):
     response = sender.keysend(
         rln.SdkKeysendRequest(
@@ -749,6 +762,7 @@ def payment_scenario():
             print("connectpeer: ok")
         except rln.RlnError.Conflict:
             print("connectpeer: already connected")
+        wait_for_peer(node_a, info_b.pubkey, 20)
 
         open_response = node_a.openchannel(
             rln.SdkOpenChannelRequest(
@@ -881,6 +895,7 @@ def openchannel_push_asset_amount_scenario():
         asset_id = issue_asset_nia(node_a, "node A")
         peer_uri = f"{node_b_pubkey}@127.0.0.1:{NODE_B_PEER_PORT + peer_offset}"
         node_a.connectpeer(peer_uri)
+        wait_for_peer(node_a, node_b_pubkey, 20)
 
         partial_push_channel = node_a.openchannel(
             rln.SdkOpenChannelRequest(

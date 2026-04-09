@@ -321,6 +321,26 @@ class ConcurrentBtcPaymentsTest {
         android.util.Log.i("ConcurrentBtcPaymentsTest", msg)
     }
 
+    private fun dumpNodeState(node: SdkNode, name: String) {
+        try {
+            val channels = node.listChannels().joinToString(separator = "; ") {
+                "id=${it.channelId},peer=${it.peerPubkey},ready=${it.ready},usable=${it.isUsable},status=${it.status},funding=${it.fundingTxid},localSat=${it.localBalanceSat},outboundMsat=${it.outboundBalanceMsat},inboundMsat=${it.inboundBalanceMsat}"
+            }.ifEmpty { "no channels" }
+            log("$name channels: $channels")
+        } catch (t: Throwable) {
+            log("$name channels dump failed: ${t::class.java.simpleName}: ${t.message}")
+        }
+
+        try {
+            val payments = node.listPayments().joinToString(separator = "; ") {
+                "hash=${it.paymentHash},status=${it.status},amtMsat=${it.amtMsat},assetId=${it.assetId},assetAmount=${it.assetAmount}"
+            }.ifEmpty { "no payments" }
+            log("$name payments: $payments")
+        } catch (t: Throwable) {
+            log("$name payments dump failed: ${t::class.java.simpleName}: ${t.message}")
+        }
+    }
+
     private fun safeShutdown(node: SdkNode?) {
         try {
             node?.shutdown()
@@ -484,6 +504,7 @@ class ConcurrentBtcPaymentsTest {
             val decoded1 = nodeA.decodeLnInvoice(invoice1)
             val decoded2 = nodeA.decodeLnInvoice(invoice2)
 
+            log("sending payment 1 from node C")
             val response1 = nodeC.sendpayment(
                 SdkSendPaymentRequest(
                     invoice = invoice1,
@@ -492,6 +513,9 @@ class ConcurrentBtcPaymentsTest {
                     assetAmount = null,
                 )
             )
+            log("sendpayment 1 returned status=${response1.status} hash=${response1.paymentHash}")
+
+            log("sending payment 2 from node D")
             val response2 = nodeD.sendpayment(
                 SdkSendPaymentRequest(
                     invoice = invoice2,
@@ -500,24 +524,32 @@ class ConcurrentBtcPaymentsTest {
                     assetAmount = null,
                 )
             )
+            log("sendpayment 2 returned status=${response2.status} hash=${response2.paymentHash}")
             assertEquals(HtlcStatus.PENDING, response1.status)
             assertEquals(HtlcStatus.PENDING, response2.status)
 
+            log("waiting for receiver to observe both payments")
             val receiverPayments = waitForObservedPayments(
                 nodeA,
                 listOf(decoded1.paymentHash, decoded2.paymentHash),
                 30L,
             )
+            dumpNodeState(nodeA, "node A after receiver observation")
             assertEquals(2, receiverPayments.size)
             assertTrue(receiverPayments.none { it.status == HtlcStatus.FAILED })
 
+            log("waiting for sender-side payment success")
             val payment1Sender = waitForPaymentStatus(nodeC, response1.paymentHash!!, 60L)
             val payment2Sender = waitForPaymentStatus(nodeD, response2.paymentHash!!, 60L)
+            dumpNodeState(nodeC, "node C after sender success")
+            dumpNodeState(nodeD, "node D after sender success")
             assertEquals(HtlcStatus.SUCCEEDED, payment1Sender.status)
             assertEquals(HtlcStatus.SUCCEEDED, payment2Sender.status)
 
+            log("waiting for receiver invoice success")
             waitForInvoiceStatus(nodeA, invoice1, InvoiceStatus.SUCCEEDED, 60L)
             waitForInvoiceStatus(nodeA, invoice2, InvoiceStatus.SUCCEEDED, 60L)
+            dumpNodeState(nodeA, "node A after invoice success")
 
             val payments = nodeA.listPayments()
             val payment1 = payments.first { it.paymentHash == decoded1.paymentHash }

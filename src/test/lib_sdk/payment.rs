@@ -417,10 +417,7 @@ fn success() {
         assert!(xfer_1.expiration.is_none());
         assert!(xfer_1.transport_endpoints.is_empty());
 
-        let xfer_2 = transfers
-            .iter()
-            .find(|transfer| transfer.idx == 2)
-            .expect("transfer 2");
+        let xfer_2 = wait_for_transfer_with_expiration(&node_a, &asset_id, 2, Duration::from_secs(20));
         assert_eq!(xfer_2.status, "Settled");
         assert_eq!(xfer_2.kind, "Send");
         assert_eq!(

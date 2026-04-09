@@ -704,13 +704,9 @@ private fun openchannelPushAssetAmountScenario() {
 
         var fundingTxid = waitForChannelFundingTx(nodeA, nodeB, assetId, CHANNEL_FUNDING_TX_TIMEOUT_SEC)
         confirmChannelFunding(nodeA, assetId, fundingTxid)
-<<<<<<< HEAD
         // Wait for channel usable on both sides before attempting keysend.
-        waitForUsableChannel(nodeA, nodeB, assetId, 300L)
-        waitForUsableChannel(nodeB, nodeA, assetId, 60L)
-=======
         waitForUsableChannel(nodeA, nodeB, assetId, CHANNEL_READY_TIMEOUT_SEC)
->>>>>>> b659661 (test: stabilize Kotlin and Android e2e flows)
+        waitForUsableChannel(nodeB, nodeA, assetId, CHANNEL_READY_TIMEOUT_SEC)
 
         val partialChannelId = nodeA.getChannelId(partialPushChannel.temporaryChannelId)
         val nodeAPartial = nodeA.listChannels().first { it.channelId == partialChannelId }
