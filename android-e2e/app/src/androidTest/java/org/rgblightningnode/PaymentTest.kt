@@ -547,6 +547,7 @@ class PaymentTest {
                     expirySec = 900u,
                     assetId = assetId,
                     assetAmount = 100u,
+                    paymentHash = null,
                 )
             ).invoice
             sendPaymentWithLnBalance(nodeA, nodeB, invoice1, assetId, 100u, 600u, 0u)
@@ -586,6 +587,7 @@ class PaymentTest {
                     expirySec = 900u,
                     assetId = assetId,
                     assetAmount = 50u,
+                    paymentHash = null,
                 )
             ).invoice
             sendPaymentWithLnBalance(nodeB, nodeA, invoice2, assetId, 50u, 100u, 500u)
@@ -608,6 +610,7 @@ class PaymentTest {
                     expirySec = 900u,
                     assetId = assetId,
                     assetAmount = 50u,
+                    paymentHash = null,
                 )
             ).invoice
             nodeA.sendpayment(
@@ -636,6 +639,7 @@ class PaymentTest {
                     expirySec = 900u,
                     assetId = assetId,
                     assetAmount = 50u,
+                    paymentHash = null,
                 )
             ).invoice
             nodeB.sendpayment(

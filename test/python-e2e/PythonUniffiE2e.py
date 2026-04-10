@@ -806,6 +806,7 @@ def payment_scenario():
                 expiry_sec=3600,
                 asset_id=asset_id,
                 asset_amount=PAYMENT_ASSET_AMOUNT,
+                payment_hash=None,
             )
         ).invoice
         print(f"invoice: {invoice}")

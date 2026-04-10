@@ -156,6 +156,7 @@ fn restart() {
                 expiry_sec: 900,
                 asset_id: Some(asset_id.clone()),
                 asset_amount: Some(100),
+                payment_hash: None,
             })
             .expect("node B ln_invoice")
             .invoice;

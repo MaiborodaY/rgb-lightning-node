@@ -511,6 +511,33 @@ private fun refreshTransfers(node: SdkNode) {
     node.refreshtransfers(SdkRefreshTransfersRequest(skipSync = false))
 }
 
+private fun dumpNodeState(name: String, node: SdkNode) {
+    println("--- $name state dump ---")
+    try {
+        val channels = node.listChannels()
+        println(
+            "$name channels: " + channels.joinToString { channel ->
+                "id=${channel.channelId},asset=${channel.assetId},ready=${channel.ready},usable=${channel.isUsable}," +
+                    "localSat=${channel.localBalanceSat},outMsat=${channel.outboundBalanceMsat},inMsat=${channel.inboundBalanceMsat}," +
+                    "assetLocal=${channel.assetLocalAmount},assetRemote=${channel.assetRemoteAmount}," +
+                    "minHtlc=${channel.nextOutboundHtlcMinimumMsat},maxHtlc=${channel.nextOutboundHtlcLimitMsat}"
+            }.ifEmpty { "no channels" }
+        )
+    } catch (t: Throwable) {
+        println("$name channels: <error ${t::class.simpleName}: ${t.message}>")
+    }
+    try {
+        val payments = node.listPayments()
+        println(
+            "$name payments: " + payments.joinToString { payment ->
+                "hash=${payment.paymentHash},status=${payment.status},amtMsat=${payment.amtMsat},assetId=${payment.assetId},assetAmount=${payment.assetAmount}"
+            }.ifEmpty { "no payments" }
+        )
+    } catch (t: Throwable) {
+        println("$name payments: <error ${t::class.simpleName}: ${t.message}>")
+    }
+}
+
 private fun safeShutdown(node: SdkNode?) {
     try {
         node?.shutdown()
@@ -600,6 +627,7 @@ private fun paymentScenario() {
                 expirySec = 3600u,
                 assetId = assetId,
                 assetAmount = PAYMENT_ASSET_AMOUNT,
+                paymentHash = null,
             )
         ).invoice
         println("invoice: $invoice")
@@ -716,7 +744,19 @@ private fun openchannelPushAssetAmountScenario() {
         check(nodeBPartial.assetLocalAmount == 250uL && nodeBPartial.assetRemoteAmount == 350uL)
 
         keysendWithLnBalance(nodeA, nodeB, nodeBPubkey, null, assetId, 100u, 350u, 250u)
-        keysend(nodeA, nodeBPubkey, 10_000_000u, null, null)
+        dumpNodeState("node A after asset keysend", nodeA)
+        dumpNodeState("node B after asset keysend", nodeB)
+        println("attempting plain BTC keysend on partially pushed RGB channel")
+        dumpNodeState("node A before BTC keysend", nodeA)
+        dumpNodeState("node B before BTC keysend", nodeB)
+        try {
+            keysend(nodeA, nodeBPubkey, 10_000_000u, null, null)
+        } catch (t: Throwable) {
+            println("plain BTC keysend failed, dumping node state")
+            dumpNodeState("node A after BTC keysend failure", nodeA)
+            dumpNodeState("node B after BTC keysend failure", nodeB)
+            throw t
+        }
         keysendWithLnBalance(nodeB, nodeA, nodeAPubkey, null, assetId, 50u, 350u, 250u)
 
         val nodeAPartialAfter = nodeA.listChannels().first { it.channelId == partialChannelId }
@@ -926,6 +966,7 @@ private fun closeCoopVanillaScenario(name: String, portOffset: UInt, withAnchors
                 expirySec = 900u,
                 assetId = null,
                 assetAmount = null,
+                paymentHash = null,
             )
         ).invoice
         val sendPayment = nodeB.sendpayment(

@@ -490,6 +490,7 @@ class ConcurrentBtcPaymentsTest {
                     expirySec = 900u,
                     assetId = null,
                     assetAmount = null,
+                    paymentHash = null,
                 )
             ).invoice
 
@@ -499,6 +500,7 @@ class ConcurrentBtcPaymentsTest {
                     expirySec = 900u,
                     assetId = null,
                     assetAmount = null,
+                    paymentHash = null,
                 )
             ).invoice
             val decoded1 = nodeA.decodeLnInvoice(invoice1)

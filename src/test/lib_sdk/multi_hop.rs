@@ -242,6 +242,7 @@ fn multi_hop() {
                 expiry_sec: 900,
                 asset_id: Some(asset_id.clone()),
                 asset_amount: Some(50),
+                payment_hash: None,
             })
             .expect("node C ln_invoice")
             .invoice;

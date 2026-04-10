@@ -101,6 +101,7 @@ fn vanilla_payment_on_rgb_channel() {
                 expiry_sec: 900,
                 asset_id: None,
                 asset_amount: None,
+                payment_hash: None,
             })
             .expect("node B vanilla ln_invoice")
             .invoice;
