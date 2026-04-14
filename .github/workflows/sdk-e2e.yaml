@@ -294,13 +294,12 @@ jobs:
       fail-fast: false
       matrix:
         test_class:
-          # Temporarily excluded from blocking Android CI:
-          # - PaymentTest: transfer expiration metadata is intermittently missing in CI
-          # - ConcurrentBtcPaymentsTest: intermittent PoisonError in sync/channel flow
-          # - SwapRoundtripBuyTest: intermittent PoisonError while waiting for the second channel to become ready
-          # Re-enable after separate Android/UniFFI stabilization work.
+          # Restored after local revalidation on fresh emulator/regtest runs.
+          - org.rgblightningnode.PaymentTest
           - org.rgblightningnode.RestartTest
           - org.rgblightningnode.MultiOpenCloseTest
+          - org.rgblightningnode.ConcurrentBtcPaymentsTest
+          - org.rgblightningnode.SwapRoundtripBuyTest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
