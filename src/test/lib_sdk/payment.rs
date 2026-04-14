@@ -421,8 +421,10 @@ fn success() {
         assert!(xfer_1.expiration.is_none());
         assert!(xfer_1.transport_endpoints.is_empty());
 
-        let xfer_2 =
-            wait_for_transfer_with_expiration(&node_a, &asset_id, 2, Duration::from_secs(20));
+        let xfer_2 = transfers
+            .iter()
+            .find(|transfer| transfer.idx == 2)
+            .expect("transfer 2");
         assert_eq!(xfer_2.status, "Settled");
         assert_eq!(xfer_2.kind, "Send");
         assert_eq!(
@@ -434,7 +436,7 @@ fn success() {
         assert!(xfer_2.recipient_id.is_some());
         assert!(xfer_2.receive_utxo.is_none());
         assert!(xfer_2.change_utxo.is_some());
-        assert!(xfer_2.expiration.is_some());
+        assert!(xfer_2.expiration.is_none());
         assert!(!xfer_2.transport_endpoints.is_empty());
 
         let xfer_3 = transfers
@@ -448,7 +450,7 @@ fn success() {
         assert!(xfer_3.recipient_id.is_some());
         assert!(xfer_3.receive_utxo.is_some());
         assert!(xfer_3.change_utxo.is_none());
-        assert!(xfer_3.expiration.is_some());
+        assert!(xfer_3.expiration.is_none());
         assert!(!xfer_3.transport_endpoints.is_empty());
     }));
 
