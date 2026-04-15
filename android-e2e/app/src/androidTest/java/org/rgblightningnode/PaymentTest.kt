@@ -527,6 +527,7 @@ class PaymentTest {
                     expirySec = 900u,
                     assetId = assetId,
                     assetAmount = 100u,
+                    descriptionHash = null,
                     paymentHash = null,
                 )
             ).invoice
@@ -567,6 +568,7 @@ class PaymentTest {
                     expirySec = 900u,
                     assetId = assetId,
                     assetAmount = 50u,
+                    descriptionHash = null,
                     paymentHash = null,
                 )
             ).invoice
@@ -590,6 +592,7 @@ class PaymentTest {
                     expirySec = 900u,
                     assetId = assetId,
                     assetAmount = 50u,
+                    descriptionHash = null,
                     paymentHash = null,
                 )
             ).invoice
@@ -619,6 +622,7 @@ class PaymentTest {
                     expirySec = 900u,
                     assetId = assetId,
                     assetAmount = 50u,
+                    descriptionHash = null,
                     paymentHash = null,
                 )
             ).invoice
