@@ -297,9 +297,15 @@ jobs:
       matrix:
         test_class:
           - org.rgblightningnode.PaymentTest
+<<<<<<< HEAD
           # Temporarily disabled: repeated CI failures and local flaky repros.
           # - org.rgblightningnode.RestartTest
           # - org.rgblightningnode.MultiOpenCloseTest
+=======
+          - org.rgblightningnode.RestartTest
+          - org.rgblightningnode.MultiOpenCloseTest
+          # Temporarily disabled: repeated CI failures and local flaky repros.
+>>>>>>> c23f976 (ci: temporarily narrow flaky Kotlin and Android e2e jobs)
           # - org.rgblightningnode.ConcurrentBtcPaymentsTest
           # - org.rgblightningnode.SwapRoundtripBuyTest
     steps:
