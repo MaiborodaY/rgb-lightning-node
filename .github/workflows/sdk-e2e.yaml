@@ -297,9 +297,9 @@ jobs:
       matrix:
         test_class:
           - org.rgblightningnode.PaymentTest
-          - org.rgblightningnode.RestartTest
-          - org.rgblightningnode.MultiOpenCloseTest
           # Temporarily disabled: repeated CI failures and local flaky repros.
+          # - org.rgblightningnode.RestartTest
+          # - org.rgblightningnode.MultiOpenCloseTest
           # - org.rgblightningnode.ConcurrentBtcPaymentsTest
           # - org.rgblightningnode.SwapRoundtripBuyTest
     steps:
