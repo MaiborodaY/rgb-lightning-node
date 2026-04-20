@@ -2,6 +2,7 @@
 import os
 import sys
 
+from hodl import hodl_e2e_scenario
 from openchannel import (
     getchannelid_fail_scenario,
     openchannel_fail_no_utxos_scenario,
@@ -14,6 +15,7 @@ SCENARIO = os.getenv("PYTHON_E2E_SCENARIO", "payment")
 
 ALL_SCENARIOS = [
     "payment",
+    "hodl_e2e",
     "openchannel_push_asset_amount",
     "getchannelid_fail",
     "openchannel_fail_no_utxos",
@@ -22,6 +24,7 @@ ALL_SCENARIOS = [
 
 SCENARIO_HANDLERS = {
     "payment": payment_scenario,
+    "hodl_e2e": hodl_e2e_scenario,
     "openchannel_push_asset_amount": openchannel_push_asset_amount_scenario,
     "getchannelid_fail": getchannelid_fail_scenario,
     "openchannel_fail_no_utxos": openchannel_fail_no_utxos_scenario,

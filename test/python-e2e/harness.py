@@ -1,4 +1,5 @@
 import hashlib
+import secrets
 import shutil
 import subprocess
 import time
@@ -80,21 +81,27 @@ def init_if_needed(node: rln.SdkNode, password: str, name: str):
 
 
 def unlock_if_needed(node: rln.SdkNode, password: str, name: str):
-    deadline = time.time() + 15
+    deadline = time.time() + 90
     last_state = "unlock not attempted"
+    next_unlock_attempt_at = 0.0
     while time.time() < deadline:
-        try:
-            node.unlock(unlock_request(password))
-            last_state = "unlocked"
-        except rln.RlnError.Conflict:
-            last_state = "already unlocked or still changing state"
-
         try:
             node.node_info()
             print(f"{name}: {last_state}")
             return
         except rln.RlnError.NotInitialized:
-            time.sleep(1)
+            pass
+
+        now = time.time()
+        if now >= next_unlock_attempt_at:
+            try:
+                node.unlock(unlock_request(password))
+                last_state = "unlocked"
+            except rln.RlnError.Conflict:
+                last_state = "already unlocked or still changing state"
+            next_unlock_attempt_at = now + 1.0
+
+        time.sleep(0.5)
 
     raise RuntimeError(f"{name}: unlock did not leave node usable (state={last_state})")
 
@@ -331,6 +338,7 @@ def wait_payment_final(node: rln.SdkNode, invoice: str, timeout_sec: int = 60):
         if status in (
             rln.InvoiceStatus.SUCCEEDED,
             rln.InvoiceStatus.FAILED,
+            rln.InvoiceStatus.CANCELLED,
             rln.InvoiceStatus.EXPIRED,
         ):
             return status
@@ -388,6 +396,29 @@ def wait_for_payment_status(
     )
 
 
+def wait_for_payment_state(
+    node: rln.SdkNode,
+    payment_hash,
+    expected_status,
+    timeout_sec: int,
+):
+    deadline = time.time() + timeout_sec
+    last_status = "not found"
+    while time.time() < deadline:
+        try:
+            payment = node.get_payment(payment_hash)
+            last_status = payment.status.name
+            if payment.status == expected_status:
+                return payment
+        except rln.RlnError.NotFound:
+            last_status = "not found"
+        time.sleep(1)
+    raise RuntimeError(
+        f"timeout waiting for payment state: payment_hash={payment_hash} "
+        f"expected={expected_status.name} last={last_status} after {timeout_sec}s"
+    )
+
+
 def wait_for_payment_present_in_list(node: rln.SdkNode, payment_hash, timeout_sec: int):
     deadline = time.time() + timeout_sec
     last_count = 0
@@ -410,6 +441,44 @@ def check_preimage_matches_hash(payment: rln.Payment, expected_payment_hash):
     if payment_preimage_hash != expected_payment_hash:
         raise RuntimeError(
             f"payment preimage hash mismatch: expected={expected_payment_hash} actual={payment_preimage_hash}"
+        )
+
+
+def random_preimage_hex() -> str:
+    return secrets.token_hex(32)
+
+
+def payment_hash_from_preimage(preimage_hex: str) -> str:
+    return hashlib.sha256(bytes.fromhex(preimage_hex)).hexdigest()
+
+
+def assert_payment_core_fields(
+    payment: rln.Payment,
+    expected_type,
+    expected_status,
+    expected_asset_id,
+    expected_asset_amount: int,
+    expected_amt_msat: int,
+):
+    if payment.payment_type != expected_type:
+        raise RuntimeError(
+            f"unexpected payment_type: expected={expected_type.name} actual={payment.payment_type.name}"
+        )
+    if payment.status != expected_status:
+        raise RuntimeError(
+            f"unexpected payment status: expected={expected_status.name} actual={payment.status.name}"
+        )
+    if str(payment.asset_id) != str(expected_asset_id):
+        raise RuntimeError(
+            f"unexpected asset_id: expected={expected_asset_id} actual={payment.asset_id}"
+        )
+    if payment.asset_amount != expected_asset_amount:
+        raise RuntimeError(
+            f"unexpected asset_amount: expected={expected_asset_amount} actual={payment.asset_amount}"
+        )
+    if payment.amt_msat != expected_amt_msat:
+        raise RuntimeError(
+            f"unexpected amt_msat: expected={expected_amt_msat} actual={payment.amt_msat}"
         )
 
 
