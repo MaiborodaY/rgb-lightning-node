@@ -60,6 +60,7 @@ jobs:
       matrix:
         scenario:
           - payment
+          - hodl_e2e
           - openchannel_push_asset_amount
           - getchannelid_fail
           - openchannel_fail_no_utxos
