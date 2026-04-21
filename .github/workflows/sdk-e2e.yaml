@@ -61,6 +61,7 @@ jobs:
         scenario:
           - payment
           - hodl_e2e
+          - hodl_expiry
           - openchannel_push_asset_amount
           - getchannelid_fail
           - openchannel_fail_no_utxos

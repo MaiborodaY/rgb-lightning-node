@@ -38,6 +38,23 @@ def run_regtest(*args: str) -> str:
     return run_command("./regtest.sh", *args)
 
 
+def get_block_count() -> int:
+    return int(
+        run_command(
+            "docker",
+            "compose",
+            "exec",
+            "-T",
+            "-u",
+            "blits",
+            "bitcoind",
+            "bitcoin-cli",
+            "-regtest",
+            "getblockcount",
+        )
+    )
+
+
 def ensure_dir(path: Path):
     if RESET_DATA and path.exists():
         shutil.rmtree(path)
