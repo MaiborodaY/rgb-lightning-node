@@ -1,3 +1,4 @@
+from pathlib import Path
 import time
 
 import rgb_lightning_node as rln
@@ -28,6 +29,7 @@ from harness import (
     create_utxos,
     ensure_dir,
     ensure_funded_with_amount,
+    get_block_count,
     init_if_needed,
     refresh_transfers,
     rgb_invoice,
@@ -46,6 +48,90 @@ from harness import (
     wait_payment_final,
     wait_for_usable_channels,
 )
+
+INBOUND_PAYMENTS_FNAME = "inbound_payments"
+LDK_DIR = ".ldk"
+PAYMENT_HASH_LEN = 32
+
+
+def _read_bigsize(data: bytes, offset: int) -> tuple[int, int]:
+    first = data[offset]
+    offset += 1
+    if first <= 0xFC:
+        return first, offset
+    if first == 0xFD:
+        return int.from_bytes(data[offset : offset + 2], "big"), offset + 2
+    if first == 0xFE:
+        return int.from_bytes(data[offset : offset + 4], "big"), offset + 4
+    return int.from_bytes(data[offset : offset + 8], "big"), offset + 8
+
+
+def _read_collection_length(data: bytes, offset: int) -> tuple[int, int]:
+    value = int.from_bytes(data[offset : offset + 2], "big")
+    offset += 2
+    if value == 0xFFFF:
+        value = int.from_bytes(data[offset : offset + 8], "big") + 0xFFFF
+        offset += 8
+    return value, offset
+
+
+def read_claim_deadline_height(receiver_storage: Path, payment_hash) -> int:
+    inbound_payments_path = receiver_storage / LDK_DIR / INBOUND_PAYMENTS_FNAME
+    data = inbound_payments_path.read_bytes()
+
+    offset = 0
+    tlv_stream_len, offset = _read_bigsize(data, offset)
+    stream_end = offset + tlv_stream_len
+    payments_blob = None
+
+    while offset < stream_end:
+        field_type, offset = _read_bigsize(data, offset)
+        field_len, offset = _read_bigsize(data, offset)
+        field_end = offset + field_len
+        if field_type == 0:
+            payments_blob = data[offset:field_end]
+            break
+        offset = field_end
+
+    if payments_blob is None:
+        raise RuntimeError(
+            f"could not find inbound payments map in {inbound_payments_path}"
+        )
+
+    target_hash = bytes.fromhex(str(payment_hash))
+    offset = 0
+    payment_count, offset = _read_collection_length(payments_blob, offset)
+
+    for _ in range(payment_count):
+        stored_hash = payments_blob[offset : offset + PAYMENT_HASH_LEN]
+        offset += PAYMENT_HASH_LEN
+
+        payment_info_len, offset = _read_bigsize(payments_blob, offset)
+        payment_info_end = offset + payment_info_len
+
+        if stored_hash == target_hash:
+            # We only need TLV type 16 from PaymentInfo, which stores claim_deadline_height.
+            info_offset = offset
+            while info_offset < payment_info_end:
+                field_type, info_offset = _read_bigsize(payments_blob, info_offset)
+                field_len, info_offset = _read_bigsize(payments_blob, info_offset)
+                field_end = info_offset + field_len
+                if field_type == 16:
+                    if field_len != 4:
+                        raise RuntimeError(
+                            f"unexpected claim_deadline_height length={field_len}"
+                        )
+                    return int.from_bytes(payments_blob[info_offset:field_end], "big")
+                info_offset = field_end
+            raise RuntimeError(
+                f"claim_deadline_height is missing for payment_hash={payment_hash}"
+            )
+
+        offset = payment_info_end
+
+    raise RuntimeError(
+        f"payment_hash={payment_hash} not found in {inbound_payments_path}"
+    )
 
 
 def wait_for_peer_channel_funding_tx(
@@ -107,6 +193,27 @@ def wait_for_channel_usable(
         time.sleep(1)
     raise RuntimeError(
         f"channel did not become usable after {timeout_sec}s: channel_id={channel_id} last={last}"
+    )
+
+
+def wait_for_invoice_status(
+    node: rln.SdkNode,
+    invoice,
+    expected_status,
+    timeout_sec: int,
+):
+    deadline = time.time() + timeout_sec
+    last = None
+    while time.time() < deadline:
+        node.sync()
+        status = node.invoice_status(invoice)
+        last = status
+        if status == expected_status:
+            return status
+        time.sleep(1)
+    raise RuntimeError(
+        f"invoice did not reach expected status after {timeout_sec}s: "
+        f"expected={expected_status.name} actual={last.name if last else None}"
     )
 
 
@@ -527,6 +634,282 @@ def run_hodl_cancel_phase(
     )
 
 
+def setup_two_node_hodl_channel(
+    node_a: rln.SdkNode,
+    node_b: rln.SdkNode,
+    scenario_name: str,
+    node_b_peer_port: int,
+):
+    print(f"Python UniFFI HODL expiry flow: {scenario_name}")
+
+    init_if_needed(node_a, NODE_A_PASSWORD, "node A")
+    init_if_needed(node_b, NODE_B_PASSWORD, "node B")
+    unlock_if_needed(node_a, NODE_A_PASSWORD, "node A")
+    unlock_if_needed(node_b, NODE_B_PASSWORD, "node B")
+
+    ensure_funded_with_amount(node_a, "node A", OPEN_CHANNEL_CAPACITY_SAT + 300_000, "0.02")
+    ensure_funded_with_amount(node_b, "node B", 200_000, "0.02")
+
+    create_utxos(node_a, "node A")
+    create_utxos(node_b, "node B")
+    run_regtest("mine", "1")
+    node_a.sync()
+    node_b.sync()
+
+    asset_id = issue_asset_nia(node_a, "node A")
+    channel_id = open_hodl_asset_channel(node_a, node_b, "node B", node_b_peer_port, asset_id)
+
+    assert_node_channel_counts(node_a, 1, 1, 1, "node A")
+    assert_node_channel_counts(node_b, 1, 1, 1, "node B")
+    assert_channel_asset_amounts(node_a, channel_id, OPEN_CHANNEL_ASSET_AMOUNT, 0, "node A")
+    assert_channel_asset_amounts(node_b, channel_id, 0, OPEN_CHANNEL_ASSET_AMOUNT, "node B")
+    assert_offchain_balances(node_a, asset_id, OPEN_CHANNEL_ASSET_AMOUNT, 0, "node A")
+    assert_offchain_balances(node_b, asset_id, 0, OPEN_CHANNEL_ASSET_AMOUNT, "node B")
+
+    return asset_id, channel_id
+
+
+def run_hodl_to_claimable(sender: rln.SdkNode, receiver: rln.SdkNode, asset_id, expiry_sec: int):
+    preimage_hex = random_preimage_hex()
+    payment_hash_hex = payment_hash_from_preimage(preimage_hex)
+    invoice = receiver.ln_invoice(
+        rln.LnInvoiceRequest(
+            amt_msat=PAYMENT_MSAT,
+            expiry_sec=expiry_sec,
+            asset_id=asset_id,
+            asset_amount=PAYMENT_ASSET_AMOUNT,
+            payment_hash=payment_hash_hex,
+            description_hash=None,
+        )
+    ).invoice
+    print(f"hodl expiry invoice: {invoice}")
+
+    decoded = sender.decode_ln_invoice(invoice)
+    assert_decoded_hodl_invoice(decoded, payment_hash_hex, asset_id)
+
+    send_payment = sender.sendpayment(
+        rln.SdkSendPaymentRequest(
+            invoice=invoice,
+            amt_msat=None,
+            asset_id=None,
+            asset_amount=None,
+        )
+    )
+    print(f"sendpayment expiry status: {send_payment.status.name}")
+    if send_payment.status in (rln.HtlcStatus.FAILED, rln.HtlcStatus.CANCELLED):
+        raise RuntimeError(
+            f"unexpected initial sendpayment status on expiry phase: {send_payment.status.name}"
+        )
+
+    claimable_payment = wait_for_payment_state(
+        receiver,
+        decoded.payment_hash,
+        rln.HtlcStatus.CLAIMABLE,
+        60,
+    )
+    assert_payment_core_fields(
+        claimable_payment,
+        rln.PaymentType.INBOUND_HODL,
+        rln.HtlcStatus.CLAIMABLE,
+        asset_id,
+        PAYMENT_ASSET_AMOUNT,
+        PAYMENT_MSAT,
+    )
+
+    claimable_status = wait_for_invoice_status(
+        receiver, invoice, rln.InvoiceStatus.CLAIMABLE, 30
+    )
+    if claimable_status != rln.InvoiceStatus.CLAIMABLE:
+        raise RuntimeError(
+            f"unexpected invoice_status before expiry: expected=CLAIMABLE actual={claimable_status.name}"
+        )
+
+    return invoice, decoded.payment_hash, preimage_hex
+
+
+def assert_hodl_not_claimable(receiver: rln.SdkNode, payment_hash, preimage_hex: str):
+    try:
+        receiver.claimhodlinvoice(
+            rln.ClaimHodlInvoiceRequest(
+                payment_hash=payment_hash,
+                payment_preimage=preimage_hex,
+            )
+        )
+        raise RuntimeError("claimhodlinvoice should fail after expiry")
+    except RuntimeError:
+        raise
+    except Exception:
+        pass
+
+    try:
+        receiver.cancelhodlinvoice(rln.CancelHodlInvoiceRequest(payment_hash=payment_hash))
+        raise RuntimeError("cancelhodlinvoice should fail after expiry")
+    except RuntimeError:
+        raise
+    except Exception:
+        pass
+
+
+def run_hodl_time_expiry_phase(sender: rln.SdkNode, receiver: rln.SdkNode, asset_id, channel_id):
+    print("=== HODL phase: expiry by time ===")
+    invoice, payment_hash, preimage_hex = run_hodl_to_claimable(sender, receiver, asset_id, 20)
+    decoded = sender.decode_ln_invoice(invoice)
+
+    # First prove the invoice is still claimable just before its timestamp-based expiry.
+    expiry_at = decoded.timestamp + decoded.expiry_sec
+    pre_expiry_margin_sec = 3
+    seconds_before_expiry = expiry_at - int(time.time()) - pre_expiry_margin_sec
+    if seconds_before_expiry < 1:
+        raise RuntimeError(
+            "not enough distance to test pre-expiry boundary: "
+            f"now={int(time.time())} expiry_at={expiry_at}"
+        )
+
+    print(
+        "waiting to just before time expiry: "
+        f"now={int(time.time())} expiry_at={expiry_at} "
+        f"sleep_before_boundary={seconds_before_expiry}"
+    )
+    time.sleep(seconds_before_expiry)
+    sender.sync()
+    receiver.sync()
+
+    receiver_pre_expiry = receiver.get_payment(payment_hash)
+    sender_pre_expiry = sender.get_payment(payment_hash)
+    if receiver_pre_expiry.status != rln.HtlcStatus.CLAIMABLE:
+        raise RuntimeError(
+            "receiver payment expired before invoice expiry boundary: "
+            f"expected=CLAIMABLE actual={receiver_pre_expiry.status.name}"
+        )
+    if sender_pre_expiry.status != rln.HtlcStatus.PENDING:
+        raise RuntimeError(
+            "sender payment finalized before invoice expiry boundary: "
+            f"expected=PENDING actual={sender_pre_expiry.status.name}"
+        )
+    pre_expiry_status = wait_for_invoice_status(receiver, invoice, rln.InvoiceStatus.CLAIMABLE, 10)
+    if pre_expiry_status != rln.InvoiceStatus.CLAIMABLE:
+        raise RuntimeError(
+            f"unexpected invoice_status before time expiry: expected=CLAIMABLE actual={pre_expiry_status.name}"
+        )
+
+    assert_channel_asset_amounts(
+        sender, channel_id, OPEN_CHANNEL_ASSET_AMOUNT, 0, "time expiry sender before expiry"
+    )
+    assert_channel_asset_amounts(
+        receiver, channel_id, 0, OPEN_CHANNEL_ASSET_AMOUNT, "time expiry receiver before expiry"
+    )
+    assert_offchain_balances(
+        sender, asset_id, OPEN_CHANNEL_ASSET_AMOUNT, 0, "time expiry node A before expiry"
+    )
+    assert_offchain_balances(
+        receiver, asset_id, 0, OPEN_CHANNEL_ASSET_AMOUNT, "time expiry node B before expiry"
+    )
+
+    receiver_failed = wait_for_payment_state(receiver, payment_hash, rln.HtlcStatus.FAILED, 90)
+    sender_failed = wait_for_payment_state(sender, payment_hash, rln.HtlcStatus.FAILED, 90)
+    assert receiver_failed.payment_type == rln.PaymentType.INBOUND_HODL
+    final_status = wait_payment_final(receiver, invoice, 30)
+    if final_status != rln.InvoiceStatus.FAILED:
+        raise RuntimeError(
+            f"unexpected final invoice_status on time expiry phase: {final_status.name}"
+        )
+
+    assert sender_failed.payment_type == rln.PaymentType.OUTBOUND
+    assert_channel_asset_amounts(sender, channel_id, OPEN_CHANNEL_ASSET_AMOUNT, 0, "time expiry sender")
+    assert_channel_asset_amounts(receiver, channel_id, 0, OPEN_CHANNEL_ASSET_AMOUNT, "time expiry receiver")
+    assert_offchain_balances(sender, asset_id, OPEN_CHANNEL_ASSET_AMOUNT, 0, "time expiry node A")
+    assert_offchain_balances(receiver, asset_id, 0, OPEN_CHANNEL_ASSET_AMOUNT, "time expiry node B")
+    assert_hodl_not_claimable(receiver, payment_hash, preimage_hex)
+
+
+def run_hodl_block_expiry_phase(
+    sender: rln.SdkNode,
+    receiver: rln.SdkNode,
+    receiver_storage: Path,
+    asset_id,
+    channel_id,
+):
+    print("=== HODL phase: expiry by blocks ===")
+    invoice, payment_hash, preimage_hex = run_hodl_to_claimable(sender, receiver, asset_id, 900)
+
+    # Use the exact LDK-provided block deadline instead of mining with a large margin.
+    deadline_height = read_claim_deadline_height(receiver_storage, payment_hash)
+    current_height = get_block_count()
+    blocks_before_deadline = deadline_height - current_height - 1
+    if blocks_before_deadline < 1:
+        raise RuntimeError(
+            "not enough distance to test pre-deadline boundary: "
+            f"current_height={current_height} deadline_height={deadline_height}"
+        )
+    print(
+        "mining to just before block expiry: "
+        f"current_height={current_height} deadline_height={deadline_height} "
+        f"blocks_before_deadline={blocks_before_deadline}"
+    )
+    run_regtest("mine", str(blocks_before_deadline))
+    sender.sync()
+    receiver.sync()
+
+    # The payment must still be alive immediately before the block deadline.
+    receiver_pre_deadline = receiver.get_payment(payment_hash)
+    sender_pre_deadline = sender.get_payment(payment_hash)
+    if receiver_pre_deadline.status != rln.HtlcStatus.CLAIMABLE:
+        raise RuntimeError(
+            "receiver payment expired before deadline: "
+            f"expected=CLAIMABLE actual={receiver_pre_deadline.status.name}"
+        )
+    if sender_pre_deadline.status != rln.HtlcStatus.PENDING:
+        raise RuntimeError(
+            "sender payment finalized before deadline: "
+            f"expected=PENDING actual={sender_pre_deadline.status.name}"
+        )
+    pre_deadline_status = wait_for_invoice_status(receiver, invoice, rln.InvoiceStatus.CLAIMABLE, 10)
+    if pre_deadline_status != rln.InvoiceStatus.CLAIMABLE:
+        raise RuntimeError(
+            f"unexpected invoice_status before deadline: expected=CLAIMABLE actual={pre_deadline_status.name}"
+        )
+
+    assert_channel_asset_amounts(
+        sender, channel_id, OPEN_CHANNEL_ASSET_AMOUNT, 0, "block expiry sender before deadline"
+    )
+    assert_channel_asset_amounts(
+        receiver, channel_id, 0, OPEN_CHANNEL_ASSET_AMOUNT, "block expiry receiver before deadline"
+    )
+    assert_offchain_balances(
+        sender, asset_id, OPEN_CHANNEL_ASSET_AMOUNT, 0, "block expiry node A before deadline"
+    )
+    assert_offchain_balances(
+        receiver, asset_id, 0, OPEN_CHANNEL_ASSET_AMOUNT, "block expiry node B before deadline"
+    )
+
+    remaining_blocks = max(deadline_height - get_block_count(), 0) + 1
+    print(
+        "mining across block expiry: "
+        f"current_height={get_block_count()} deadline_height={deadline_height} "
+        f"remaining_blocks={remaining_blocks}"
+    )
+    run_regtest("mine", str(remaining_blocks))
+    sender.sync()
+    receiver.sync()
+
+    # Crossing the deadline should flip the held HTLC into a failed payment on both sides.
+    receiver_failed = wait_for_payment_state(receiver, payment_hash, rln.HtlcStatus.FAILED, 60)
+    sender_failed = wait_for_payment_state(sender, payment_hash, rln.HtlcStatus.FAILED, 60)
+    assert receiver_failed.payment_type == rln.PaymentType.INBOUND_HODL
+    final_status = wait_payment_final(receiver, invoice, 30)
+    if final_status != rln.InvoiceStatus.FAILED:
+        raise RuntimeError(
+            f"unexpected final invoice_status on block expiry phase: {final_status.name}"
+        )
+
+    assert sender_failed.payment_type == rln.PaymentType.OUTBOUND
+    assert_channel_asset_amounts(sender, channel_id, OPEN_CHANNEL_ASSET_AMOUNT, 0, "block expiry sender")
+    assert_channel_asset_amounts(receiver, channel_id, 0, OPEN_CHANNEL_ASSET_AMOUNT, "block expiry receiver")
+    assert_offchain_balances(sender, asset_id, OPEN_CHANNEL_ASSET_AMOUNT, 0, "block expiry node A")
+    assert_offchain_balances(receiver, asset_id, 0, OPEN_CHANNEL_ASSET_AMOUNT, "block expiry node B")
+    assert_hodl_not_claimable(receiver, payment_hash, preimage_hex)
+
+
 def hodl_e2e_scenario():
     scenario = "hodl_e2e"
     node_a_storage = scenario_storage(scenario, "node_a")
@@ -723,3 +1106,33 @@ def hodl_e2e_scenario():
         safe_shutdown(node_a)
         safe_shutdown(node_b)
         safe_shutdown(node_c)
+
+
+def hodl_expiry_scenario():
+    scenario = "hodl_expiry"
+    node_a_storage = scenario_storage(scenario, "node_a")
+    node_b_storage = scenario_storage(scenario, "node_b")
+
+    print("Python UniFFI HODL expiry flow")
+    print(f"node A storage: {node_a_storage}")
+    print(f"node B storage: {node_b_storage}")
+
+    ensure_dir(node_a_storage)
+    ensure_dir(node_b_storage)
+
+    node_a = None
+    node_b = None
+    try:
+        node_a = make_node(node_a_storage, NODE_A_DAEMON_PORT + 30, NODE_A_PEER_PORT + 30)
+        node_b = make_node(node_b_storage, NODE_B_DAEMON_PORT + 30, NODE_B_PEER_PORT + 30)
+
+        asset_id, channel_id = setup_two_node_hodl_channel(
+            node_a, node_b, scenario, NODE_B_PEER_PORT + 30
+        )
+        run_hodl_time_expiry_phase(node_a, node_b, asset_id, channel_id)
+        run_hodl_block_expiry_phase(node_a, node_b, node_b_storage, asset_id, channel_id)
+
+        print("SUCCESS: Python HODL expiry flow completed")
+    finally:
+        safe_shutdown(node_a)
+        safe_shutdown(node_b)
