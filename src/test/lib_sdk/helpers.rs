@@ -28,6 +28,7 @@ pub(crate) const OPEN_CHANNEL_ASSET_AMOUNT: u64 = 600;
 pub(crate) const OPEN_CHANNEL_PUSH_MSAT: u64 = 3_500_000;
 pub(crate) const HTLC_MIN_MSAT: u64 = 3_000_000;
 pub(crate) const PAYMENT_MSAT: u64 = HTLC_MIN_MSAT;
+pub(crate) const LIQUIDITY_KEYSEND_MSAT: u64 = 10_000_000;
 pub(crate) const CREATE_UTXOS_NUM: u8 = 10;
 pub(crate) const CREATE_UTXOS_FEE_RATE: u64 = 7;
 pub(crate) const PROXY_ENDPOINT_LOCAL: &str = "rpc://127.0.0.1:3000/json-rpc";
@@ -432,6 +433,43 @@ pub(crate) fn wait_for_usable_channel(
             mine(1);
         }
         sleep(Duration::from_secs(2));
+    }
+}
+
+pub(crate) fn wait_for_channel_asset_state(
+    label: &str,
+    node: &SdkNode,
+    channel_id: lightning::ln::types::ChannelId,
+    expected_asset_local: Option<u64>,
+    expected_asset_remote: Option<u64>,
+    min_outbound_msat: Option<u64>,
+    timeout: Duration,
+) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        node.sync()
+            .unwrap_or_else(|_| panic!("{label}: node sync while waiting for channel state"));
+        let channel = node
+            .list_channels()
+            .unwrap_or_else(|_| panic!("{label}: list_channels while waiting for channel state"))
+            .into_iter()
+            .find(|channel| channel.channel_id == channel_id)
+            .unwrap_or_else(|| panic!("{label}: expected channel {channel_id}"));
+        if channel.ready
+            && channel.is_usable
+            && channel.asset_local_amount == expected_asset_local
+            && channel.asset_remote_amount == expected_asset_remote
+            && min_outbound_msat
+                .map(|min_outbound_msat| channel.outbound_balance_msat >= min_outbound_msat)
+                .unwrap_or(true)
+        {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{label} did not reach expected channel state"
+        );
+        sleep(Duration::from_secs(1));
     }
 }
 
