@@ -1,6 +1,49 @@
 use crate::helpers::*;
 use serial_test::serial;
-use std::{fs, time::Duration};
+use std::{
+    fs,
+    thread::sleep,
+    time::{Duration, Instant},
+};
+
+const LIQUIDITY_KEYSEND_MSAT: u64 = 10_000_000;
+
+fn wait_for_channel_asset_state(
+    label: &str,
+    node: &SdkNode,
+    channel_id: lightning::ln::types::ChannelId,
+    expected_asset_local: Option<u64>,
+    expected_asset_remote: Option<u64>,
+    min_outbound_msat: Option<u64>,
+    timeout: Duration,
+) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        node.sync()
+            .unwrap_or_else(|_| panic!("{label}: node sync while waiting for channel state"));
+        let channel = node
+            .list_channels()
+            .unwrap_or_else(|_| panic!("{label}: list_channels while waiting for channel state"))
+            .into_iter()
+            .find(|channel| channel.channel_id == channel_id)
+            .unwrap_or_else(|| panic!("{label}: expected channel {channel_id}"));
+        if channel.ready
+            && channel.is_usable
+            && channel.asset_local_amount == expected_asset_local
+            && channel.asset_remote_amount == expected_asset_remote
+            && min_outbound_msat
+                .map(|min_outbound_msat| channel.outbound_balance_msat >= min_outbound_msat)
+                .unwrap_or(true)
+        {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{label} did not reach expected channel state"
+        );
+        sleep(Duration::from_secs(1));
+    }
+}
 
 #[test]
 #[serial]
@@ -125,7 +168,40 @@ fn openchannel_push_asset_amount() {
             350,
             250,
         );
-        keysend(&node_a, node_b_pubkey, Some(10_000_000), None, None);
+        wait_for_channel_asset_state(
+            "node A partial push after first RGB keysend",
+            &node_a,
+            partial_channel_id,
+            Some(250),
+            Some(350),
+            None,
+            Duration::from_secs(30),
+        );
+        wait_for_channel_asset_state(
+            "node B partial push after first RGB keysend",
+            &node_b,
+            partial_channel_id,
+            Some(350),
+            Some(250),
+            None,
+            Duration::from_secs(30),
+        );
+        keysend(
+            &node_a,
+            node_b_pubkey,
+            Some(LIQUIDITY_KEYSEND_MSAT),
+            None,
+            None,
+        );
+        wait_for_channel_asset_state(
+            "node B partial push before reverse RGB keysend",
+            &node_b,
+            partial_channel_id,
+            Some(350),
+            Some(250),
+            Some(PAYMENT_MSAT),
+            Duration::from_secs(30),
+        );
         keysend_with_ln_balance(
             &node_b,
             &node_a,
@@ -221,7 +297,31 @@ fn openchannel_push_asset_amount() {
         assert_eq!(node_b_channel.asset_local_amount, Some(600));
         assert_eq!(node_b_channel.asset_remote_amount, Some(0));
 
-        keysend(&node_a, node_b_pubkey, Some(10_000_000), None, None);
+        keysend(
+            &node_a,
+            node_b_pubkey,
+            Some(LIQUIDITY_KEYSEND_MSAT),
+            None,
+            None,
+        );
+        wait_for_channel_asset_state(
+            "node A full push before reverse RGB keysend",
+            &node_a,
+            full_channel_id,
+            Some(0),
+            Some(600),
+            None,
+            Duration::from_secs(30),
+        );
+        wait_for_channel_asset_state(
+            "node B full push before reverse RGB keysend",
+            &node_b,
+            full_channel_id,
+            Some(600),
+            Some(0),
+            Some(PAYMENT_MSAT),
+            Duration::from_secs(30),
+        );
         keysend_with_ln_balance(
             &node_b,
             &node_a,

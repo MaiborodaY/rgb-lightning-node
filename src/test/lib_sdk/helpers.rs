@@ -742,7 +742,7 @@ pub(crate) fn keysend(
             asset_amount,
         })
         .expect("keysend");
-    wait_for_payment_status(sender, &keysend.payment_hash, Duration::from_secs(60))
+    wait_for_succeeded_payment_in_list(sender, &keysend.payment_hash, Duration::from_secs(60))
 }
 
 pub(crate) fn close_channel(
