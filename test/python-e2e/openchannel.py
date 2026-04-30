@@ -32,6 +32,7 @@ from harness import (
     unlock_if_needed,
     unlock_request,
     wait_for_balance,
+    wait_for_channel_asset_state,
     wait_for_channel_funding_tx,
     wait_for_channel_id,
     wait_for_channel_ready,
@@ -254,6 +255,7 @@ def openchannel_push_asset_amount_scenario():
         fund_and_create_utxos(node_c, "node C")
 
         asset_id = issue_asset_nia(node_a, "node A")
+        wait_for_balance(node_a, asset_id, 1000, 60)
         peer_uri = f"{node_b_pubkey}@127.0.0.1:{NODE_B_PEER_PORT + peer_offset}"
         node_a.connectpeer(peer_uri)
         wait_for_peer(node_a, node_b_pubkey, 20)
@@ -273,6 +275,10 @@ def openchannel_push_asset_amount_scenario():
                 push_asset_amount=250,
                 virtual_open_mode=None,
             )
+        )
+        print(
+            "partial_push_channel temporary_channel_id: "
+            f"{partial_push_channel.temporary_channel_id}"
         )
 
         funding_txid = wait_for_channel_funding_tx(node_a, node_b, asset_id, 120)
@@ -300,9 +306,36 @@ def openchannel_push_asset_amount_scenario():
         )
 
         keysend_with_ln_balance(node_a, node_b, node_b_pubkey, None, asset_id, 100, 350, 250)
+        wait_for_channel_asset_state(
+            "node A partial push after first RGB keysend",
+            node_a,
+            partial_channel_id,
+            250,
+            350,
+            None,
+            30,
+        )
+        wait_for_channel_asset_state(
+            "node B partial push after first RGB keysend",
+            node_b,
+            partial_channel_id,
+            350,
+            250,
+            None,
+            30,
+        )
         btc_payment_hash = keysend(node_a, node_b_pubkey, 10_000_000, None, None)
         wait_for_payment_status(
             node_b, btc_payment_hash, rln.PaymentType.INBOUND_AUTO_CLAIM, 60
+        )
+        wait_for_channel_asset_state(
+            "node B partial push before reverse RGB keysend",
+            node_b,
+            partial_channel_id,
+            350,
+            250,
+            3_000_000,
+            30,
         )
         keysend_with_ln_balance(node_b, node_a, node_a_pubkey, None, asset_id, 50, 350, 250)
 

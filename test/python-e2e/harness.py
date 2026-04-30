@@ -323,6 +323,45 @@ def wait_for_channel_ready(
     )
 
 
+def wait_for_channel_asset_state(
+    label: str,
+    node: rln.SdkNode,
+    channel_id,
+    expected_asset_local,
+    expected_asset_remote,
+    min_outbound_msat,
+    timeout_sec: int,
+):
+    deadline = time.time() + timeout_sec
+    last = "channel not found"
+    while time.time() < deadline:
+        node.sync()
+        channel = next((c for c in node.list_channels() if c.channel_id == channel_id), None)
+        if channel is not None:
+            last = (
+                f"id={channel.channel_id},ready={channel.ready},usable={channel.is_usable},"
+                f"asset_local={channel.asset_local_amount},"
+                f"asset_remote={channel.asset_remote_amount},"
+                f"outbound_msat={channel.outbound_balance_msat}"
+            )
+            outbound_ok = (
+                min_outbound_msat is None
+                or channel.outbound_balance_msat >= min_outbound_msat
+            )
+            if (
+                channel.ready
+                and channel.is_usable
+                and channel.asset_local_amount == expected_asset_local
+                and channel.asset_remote_amount == expected_asset_remote
+                and outbound_ok
+            ):
+                return
+        time.sleep(1)
+    raise RuntimeError(
+        f"{label} did not reach expected channel state after {timeout_sec}s: last={last}"
+    )
+
+
 def wait_for_channel_id(
     node: rln.SdkNode,
     temporary_channel_id,
