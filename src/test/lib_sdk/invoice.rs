@@ -20,8 +20,7 @@ fn description_hash_survives_sdk_path() {
     let node = make_node(&node_dir, NODE_A_DAEMON_PORT + 90, NODE_A_PEER_PORT + 90);
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        node.init("nodeApass".to_string(), None)
-            .expect("node init");
+        node.init("nodeApass".to_string(), None).expect("node init");
         node.unlock(unlock_request("nodeApass"))
             .expect("node unlock");
 
