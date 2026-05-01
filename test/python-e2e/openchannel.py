@@ -259,6 +259,7 @@ def openchannel_push_asset_amount_scenario():
         peer_uri = f"{node_b_pubkey}@127.0.0.1:{NODE_B_PEER_PORT + peer_offset}"
         node_a.connectpeer(peer_uri)
         wait_for_peer(node_a, node_b_pubkey, 20)
+        wait_for_peer(node_b, node_a_pubkey, 20)
 
         partial_push_channel = node_a.openchannel(
             rln.SdkOpenChannelRequest(
