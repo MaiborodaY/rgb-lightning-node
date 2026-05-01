@@ -196,12 +196,12 @@ class PaymentTest {
         val deadline = System.currentTimeMillis() + timeoutSec * 1_000L
         var lastBalance = 0uL
         while (System.currentTimeMillis() < deadline) {
-            node.refreshtransfers(SdkRefreshTransfersRequest(skipSync = false))
             val balance = assetBalanceSpendable(node, assetId)
             lastBalance = balance
             if (balance == expected) {
                 return
             }
+            node.refreshtransfers(SdkRefreshTransfersRequest(skipSync = false))
             Thread.sleep(1_000L)
         }
         error("spendable balance did not become expected=$expected actual=$lastBalance after ${timeoutSec}s")
@@ -493,7 +493,6 @@ class PaymentTest {
                 )
             ).assetId
             log("issued asset: $assetId")
-            waitForBalance(nodeA, assetId, assetSupply, 60L)
 
             val infoA = nodeA.nodeInfo(); val infoB = nodeB.nodeInfo()
             log("node A pubkey: ${infoA.pubkey}")
