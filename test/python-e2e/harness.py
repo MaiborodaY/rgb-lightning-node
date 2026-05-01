@@ -408,11 +408,11 @@ def wait_for_balance(node: rln.SdkNode, asset_id, expected: int, timeout_sec: in
     deadline = time.time() + timeout_sec
     last_balance = 0
     while time.time() < deadline:
+        node.refreshtransfers(rln.SdkRefreshTransfersRequest(skip_sync=False))
         balance = asset_balance_spendable(node, asset_id)
         last_balance = balance
         if balance == expected:
             return
-        node.refreshtransfers(rln.SdkRefreshTransfersRequest(skip_sync=False))
         time.sleep(1)
     raise RuntimeError(
         f"spendable balance did not become expected={expected} actual={last_balance} asset_id={asset_id} after {timeout_sec}s"
