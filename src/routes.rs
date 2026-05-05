@@ -104,6 +104,15 @@ use crate::{
     },
 };
 
+#[cfg(test)]
+static RGB_OPENCHANNEL_RACE_FORCE_METADATA_DELAY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+pub(crate) fn set_rgb_openchannel_race_force_metadata_delay(enabled: bool) {
+    RGB_OPENCHANNEL_RACE_FORCE_METADATA_DELAY.store(enabled, std::sync::atomic::Ordering::SeqCst);
+}
+
 const UTXO_NUM: u8 = 4;
 
 const OPENRGBCHANNEL_MIN_SAT: u64 = HTLC_MIN_MSAT / 1000 * 10 + 10;
@@ -3826,6 +3835,19 @@ pub(crate) async fn open_channel(
         }
         let temporary_channel_id = temporary_channel_id.0.as_hex().to_string();
         tracing::info!("EVENT: initiated channel with peer {}", peer_pubkey);
+
+        #[cfg(test)]
+        if colored_info.is_some()
+            && RGB_OPENCHANNEL_RACE_FORCE_METADATA_DELAY.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            // Test-only hook used by the ignored RGB openchannel race repro. It widens the
+            // window where LDK may emit FundingGenerationReady before RGB metadata is persisted.
+            eprintln!(
+                "TEST HOOK: delaying RGB channel metadata write for temporary_channel_id={temporary_channel_id}"
+            );
+            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
 
         if let Some((contract_id, asset_amount)) = &colored_info {
             let push_amount = payload.push_asset_amount.unwrap_or(0);

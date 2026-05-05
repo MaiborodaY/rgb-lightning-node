@@ -2258,6 +2258,7 @@ mod open_after_double_send;
 mod openchannel_fail;
 mod openchannel_optional_addr;
 mod openchannel_push_asset_amount;
+mod openchannel_rgb_funding_race;
 mod payment;
 mod refuse_high_fees;
 mod restart;
